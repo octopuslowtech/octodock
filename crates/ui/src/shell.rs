@@ -3637,7 +3637,7 @@ impl Shell {
                 LinkAction::External
             };
         }
-        let outcome = resolved.web_outcome(cfg!(any(target_os = "macos", target_os = "linux")));
+        let outcome = resolved.web_outcome(cfg!(any(target_os = "macos", target_os = "linux", windows)));
         if outcome == LinkOutcome::Internal {
             self.set_surfaces_open(true, cx);
             self.add_browser_surface(activation.target.navigation.clone().ok(), window, cx);
@@ -7427,6 +7427,20 @@ impl Shell {
         let shows_metadata = branch.is_some() || change_request.is_some();
         let queued = queued && !undelivered;
         let working = status == zeron_proto::ChatIndicator::Working && !queued && !undelivered;
+        // Subagents running under this chat show as a "● N" pill beside the
+        // row's own activity indicator, never in place of it: the pill takes
+        // the time stamp's spot (compact) or leads the status (regular), and
+        // keeps showing after the parent's own turn has settled.
+        let running_subagents = self.state.read(cx).running_subagents_for(&id, Utc::now());
+        let subagent_pill = |suffix: &str| {
+            (running_subagents > 0).then(|| {
+                crate::running_pill::running_pill(
+                    format!("{row_id}-subagents-{suffix}"),
+                    running_subagents,
+                    theme,
+                )
+            })
+        };
         let compact_status = compact.then(|| {
             let glyph = if working {
                 loaders::mini_glyph_spinner(
@@ -7574,20 +7588,33 @@ impl Shell {
                         .flex()
                         .flex_row()
                         .items_center()
-                        .gap(px(4.0))
-                        .child(glyph)
+                        .gap(px(6.0))
+                        .children(subagent_pill("label"))
                         .child(
                             div()
-                                .text_size(crate::typography::ui_rems(10.0))
-                                .font_weight(gpui::FontWeight::MEDIUM)
-                                .text_color(status_color)
-                                .child(SharedString::from(label)),
+                                .flex()
+                                .flex_row()
+                                .items_center()
+                                .gap(px(4.0))
+                                .child(glyph)
+                                .child(
+                                    div()
+                                        .text_size(crate::typography::ui_rems(10.0))
+                                        .font_weight(gpui::FontWeight::MEDIUM)
+                                        .text_color(status_color)
+                                        .child(SharedString::from(label)),
+                                ),
                         )
                         .into_any_element()
                 }
                 None => div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap(px(6.0))
                     .text_size(crate::typography::ui_rems(10.0))
                     .font_weight(gpui::FontWeight::MEDIUM)
+                    .children(subagent_pill("idle"))
                     .child(time_ago.clone())
                     .into_any_element(),
             }
@@ -7920,6 +7947,11 @@ impl Shell {
                         let text_hint = compact_jump_label
                             .as_ref()
                             .is_some_and(|label| label.chars().count() > 3);
+                        // Running subagents take the time stamp's place; the
+                        // legend and the hover archive still win.
+                        let pill = (!show_legend && !show_archive)
+                            .then(|| subagent_pill("compact"))
+                            .flatten();
                         let archive_id = id.clone();
                         el.children(change_request.clone().map(|summary| {
                             if preview {
@@ -7948,7 +7980,8 @@ impl Shell {
                                 .when(text_hint, |el| {
                                     el.min_w(crate::typography::ui_rems(COMPACT_JUMP_HINT_WIDTH))
                                 })
-                                .when(!text_hint, |el| el.w(px(30.0)))
+                                // A running-subagents pill can be wider than the plain time.
+                                .when(!text_hint, |el| el.min_w(px(30.0)))
                                 // Fixed height so swapping the time text for the
                                 // archive glyph never resizes the slot.
                                 .h(px(14.0))
@@ -7993,6 +8026,8 @@ impl Shell {
                                     .flex_none()
                                     .text_color(theme.text_muted)
                                     .into_any_element()
+                                } else if let Some(pill) = pill {
+                                    pill
                                 } else {
                                     div()
                                         .whitespace_nowrap()
@@ -12782,7 +12817,7 @@ impl Render for Shell {
         } else {
             px(0.0)
         };
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", windows))]
         let browser_overlay_width = px(if self.files_visible_width(cx) > 0.0 {
             self.files_visible_width(cx) + PANE_RESIZE_HITBOX_HALF_WIDTH
         } else {
@@ -12796,10 +12831,9 @@ impl Render for Shell {
             );
             browser.update(cx, |browser, cx| {
                 #[cfg(target_os = "macos")]
-                {
-                    browser.set_resize_inset(browser_resize_inset, cx);
-                    browser.set_right_occlusion(browser_overlay_width, cx);
-                }
+                browser.set_resize_inset(browser_resize_inset, cx);
+                #[cfg(any(target_os = "macos", windows))]
+                browser.set_right_occlusion(browser_overlay_width, cx);
                 browser.set_shortcuts(&self.settings.keymap);
                 browser.set_presentation(presentation, cx);
             });
@@ -13794,6 +13828,7 @@ mod tests {
             status,
             started_at: Some(updated_at),
             updated_at,
+            running_subagents: 0,
         }
     }
 
@@ -17173,6 +17208,9 @@ impl Shell {
     pub fn fixture_appshots_transcript_start(&self, cx: &mut Context<Self>) {
         self.transcript
             .update(cx, |t, cx| t.fixture_appshots_start(cx));
+    }
+    pub fn fixture_transcript(&self) -> Entity<crate::transcript::Transcript> {
+        self.transcript.clone()
     }
 }
 

@@ -9747,6 +9747,24 @@ impl Composer {
         let Some(question) = wizard.current().cloned() else {
             return gpui::Empty.into_any_element();
         };
+        // The answer borrows the composer's editor, but the composer's own
+        // sizing does not run while the panel shows. Without a limit of its
+        // own the editor kept a stale one-line viewport, so new lines painted
+        // below the card instead of growing it. Grow up to the composer's cap.
+        let answer_cap = TEXTAREA_MAX - TEXTAREA_PAD_V;
+        self.input.update(cx, |input, cx| {
+            if input.viewport_height != Some(answer_cap)
+                || input.settled_viewport_height != Some(answer_cap)
+                || input.resizing
+                || input.overflow_top_padding != 0.0
+            {
+                input.viewport_height = Some(answer_cap);
+                input.settled_viewport_height = Some(answer_cap);
+                input.resizing = false;
+                input.overflow_top_padding = 0.0;
+                cx.notify();
+            }
+        });
         let page = wizard.page;
         let last = page + 1 >= wizard.questions.len();
         let typed_empty = self.input.read(cx).is_empty();
@@ -12567,6 +12585,7 @@ mod tests {
                 status: zeron_proto::SessionStatus::Working,
                 started_at: Some(updated),
                 updated_at: updated,
+                running_subagents: 0,
             }];
             state.selected_chat = Some("c".into());
             state.watch_clock_transitions(cx);
