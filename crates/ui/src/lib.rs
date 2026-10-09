@@ -68,6 +68,7 @@ pub(crate) mod tool_images;
 pub mod theme;
 pub mod theme_library;
 pub mod transcript;
+mod turn_stats;
 pub mod typography;
 pub mod voice;
 mod workspace_links;
@@ -160,7 +161,8 @@ pub fn run_app(config: UiConfig) {
         gpui_tokio::init_from_handle(cx, runtime_handle);
         gpui_base::init(cx);
         let data_dir = config.boot().data_dir.clone();
-        let ui_settings = settings::UiSettings::load(&data_dir);
+        let ui_settings =
+            settings::with_default_background(settings::UiSettings::load(&data_dir), &data_dir);
         settings::init(ui_settings.clone(), data_dir.clone(), cx);
         let font_availability = typography::register_fonts(cx);
         // Typography first: theme installation reads the effective family, so

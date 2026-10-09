@@ -64,6 +64,8 @@ pub const FILES_AUTOSAVE_DELAY_MAX_MS: u64 = 10_000;
 
 const FILE_NAME: &str = "ui-settings.json";
 const NEW_THREAD_BACKGROUND_DIR: &str = "new-thread-backgrounds";
+const DEFAULT_BACKGROUND: &[u8] = include_bytes!("../assets/backgrounds/default.jpg");
+const DEFAULT_BACKGROUND_NAME: &str = "default.jpg";
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -148,55 +150,6 @@ impl NewThreadBackgroundEffect {
             Self::Ascii => "Recreates the artwork with colored characters on black.",
             Self::Halftone => "Recreates the artwork with colored print dots on black.",
             Self::Scanlines => "Adds a pronounced horizontal display-line texture.",
-        }
-    }
-}
-
-/// Which sessions the background artwork covers. The blank new-session canvas
-/// always shows it; `AllSessions` also paints it behind an open session's
-/// transcript.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub enum NewThreadBackgroundScope {
-    #[default]
-    EmptySessions,
-    AllSessions,
-}
-
-impl NewThreadBackgroundScope {
-    pub const ALL: [Self; 2] = [Self::EmptySessions, Self::AllSessions];
-
-    pub const fn label(self) -> &'static str {
-        match self {
-            Self::EmptySessions => "Empty sessions",
-            Self::AllSessions => "All sessions",
-        }
-    }
-
-    pub const fn description(self) -> &'static str {
-        match self {
-            Self::EmptySessions => "Shows the image only on the blank new-session canvas.",
-            Self::AllSessions => "Shows the image behind open sessions too.",
-        }
-    }
-
-    /// Artwork opacity uses the hero/thread dissolve so the canvas can hand
-    /// itself over to a transcript. Under `AllSessions` the artwork is a
-    /// steady backdrop in both states, so that handoff never applies.
-    pub const fn background_dissolve(self, dock_dissolve: f32) -> f32 {
-        match self {
-            Self::EmptySessions => dock_dissolve,
-            Self::AllSessions => 0.0,
-        }
-    }
-
-    /// Whether the artwork layer mounts this frame. `EmptySessions` reserves
-    /// it for the blank canvas, plus the frames of the route dissolve that
-    /// fades it out as a transcript takes over.
-    pub const fn mounts(self, has_selection: bool, dock_active: bool) -> bool {
-        match self {
-            Self::EmptySessions => !has_selection || dock_active,
-            Self::AllSessions => true,
         }
     }
 }
@@ -529,16 +482,40 @@ fn commit_background(
     Ok(())
 }
 
+fn default_background(data_dir: &Path) -> Option<NewThreadComposerBackground> {
+    let backgrounds_dir = data_dir.join(NEW_THREAD_BACKGROUND_DIR);
+    let path = backgrounds_dir.join(DEFAULT_BACKGROUND_NAME);
+    if !path.is_file() {
+        std::fs::create_dir_all(&backgrounds_dir).ok()?;
+        std::fs::write(&path, DEFAULT_BACKGROUND).ok()?;
+    }
+    Some(NewThreadComposerBackground {
+        path: path.to_string_lossy().into_owned(),
+        name: DEFAULT_BACKGROUND_NAME.into(),
+        adjustment: NewThreadBackgroundAdjustment::default(),
+    })
+}
+
+pub fn with_default_background(mut settings: UiSettings, data_dir: &Path) -> UiSettings {
+    if settings.new_thread_composer_background.is_none() {
+        settings.new_thread_composer_background = default_background(data_dir);
+    }
+    settings
+}
+
 pub fn remove_new_thread_composer_background(cx: &mut App) -> Result<(), String> {
     let data_dir = cx
         .try_global::<SettingsStore>()
         .map(|store| store.data_dir.clone())
         .ok_or_else(|| "Unable to remove the image. Restart Zeron and try again.".to_string())?;
     let mut next = current(cx);
-    let previous = next.new_thread_composer_background.take();
+    let previous = std::mem::replace(
+        &mut next.new_thread_composer_background,
+        default_background(&data_dir),
+    );
     next.wallpaper_source = None;
     next.wallpaper_color = None;
-    if previous.is_none() {
+    if previous == next.new_thread_composer_background {
         return Ok(());
     }
     if next.save(&data_dir).is_err() {
@@ -546,11 +523,17 @@ pub fn remove_new_thread_composer_background(cx: &mut App) -> Result<(), String>
             "Unable to remove the image. Check folder permissions and try again.".to_string(),
         );
     }
+    let kept = next
+        .new_thread_composer_background
+        .as_ref()
+        .map(|background| background.path.clone());
     replace(next, SavePolicy::Immediate, cx);
-    remove_managed_new_thread_background(
-        previous.as_ref(),
-        &data_dir.join(NEW_THREAD_BACKGROUND_DIR),
-    );
+    if previous.as_ref().map(|background| &background.path) != kept.as_ref() {
+        remove_managed_new_thread_background(
+            previous.as_ref(),
+            &data_dir.join(NEW_THREAD_BACKGROUND_DIR),
+        );
+    }
     if current(cx).wallpaper_theme_colors {
         crate::appearance::apply(cx);
     }
@@ -574,14 +557,6 @@ pub fn set_new_thread_background_adjustment(
         if let Some(background) = settings.new_thread_composer_background.as_mut() {
             background.adjustment = adjustment.normalized();
         }
-    }) {
-        cx.refresh_windows();
-    }
-}
-
-pub fn set_new_thread_background_scope(scope: NewThreadBackgroundScope, cx: &mut App) {
-    if update(SavePolicy::Immediate, cx, |settings| {
-        settings.new_thread_background_scope = scope;
     }) {
         cx.refresh_windows();
     }
@@ -829,7 +804,8 @@ impl SkillCompletionSettings {
     }
 }
 
-pub const SKILL_COMPLETION_HARNESSES: [(zeron_proto::HarnessId, &str); 9] = [
+pub const SKILL_COMPLETION_HARNESSES: [(zeron_proto::HarnessId, &str); 10] = [
+    (zeron_proto::HarnessId::Amp, "Amp"),
     (zeron_proto::HarnessId::Antigravity, "Antigravity"),
     (zeron_proto::HarnessId::ClaudeCode, "Claude Code"),
     (zeron_proto::HarnessId::Codex, "Codex"),
@@ -1018,9 +994,6 @@ pub struct UiSettings {
     pub wallpaper_color: Option<zeron_theme::Color>,
     /// Non-destructive treatment composited inside the artwork's fade mask.
     pub new_thread_background_effect: NewThreadBackgroundEffect,
-    /// Which sessions the artwork covers: the blank canvas alone (the
-    /// default), or every open session's transcript as well.
-    pub new_thread_background_scope: NewThreadBackgroundScope,
     /// Snap animations to rest. Defaults to following the OS.
     pub reduce_motion: crate::motion::ReduceMotion,
     /// Also snap animations while the main window is not focused.
@@ -1116,7 +1089,6 @@ impl Default for UiSettings {
             wallpaper_theme_colors: false,
             wallpaper_color: None,
             new_thread_background_effect: NewThreadBackgroundEffect::None,
-            new_thread_background_scope: NewThreadBackgroundScope::EmptySessions,
             reduce_motion: crate::motion::ReduceMotion::System,
             pause_animations_in_background: false,
             codex_voice: None,
@@ -1739,7 +1711,6 @@ impl UiSettings {
             code_font_family,
             code_font_size,
             theme_selection,
-            new_thread_background_scope,
             diff_split,
             diff_wrap,
             code_fences_fit_content,
@@ -2055,10 +2026,6 @@ mod tests {
         assert_eq!(
             loaded.new_thread_background_effect,
             NewThreadBackgroundEffect::None
-        );
-        assert_eq!(
-            loaded.new_thread_background_scope,
-            NewThreadBackgroundScope::EmptySessions
         );
         assert_eq!(loaded.reduce_motion, crate::motion::ReduceMotion::System);
         assert!(!loaded.pause_animations_in_background);
@@ -2671,6 +2638,37 @@ mod tests {
         });
     }
 
+    #[gpui::test]
+    fn bundled_background_seeds_fresh_settings_and_returns_on_reset(cx: &mut gpui::TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let custom = dir.path().join("custom.png");
+        image::RgbaImage::from_pixel(8, 8, image::Rgba([20, 100, 200, 255]))
+            .save(&custom)
+            .unwrap();
+        cx.update(|cx| {
+            let seeded = with_default_background(UiSettings::default(), dir.path());
+            let bundled = seeded.new_thread_composer_background.clone().unwrap();
+            assert_eq!(std::fs::read(&bundled.path).unwrap(), DEFAULT_BACKGROUND);
+            assert!(crate::new_thread_background_image::decode(DEFAULT_BACKGROUND).is_ok());
+            assert_eq!(with_default_background(seeded.clone(), dir.path()), seeded);
+            init(seeded, dir.path(), cx);
+            install_new_thread_composer_background(&custom, cx).unwrap();
+            let chosen = current(cx).new_thread_composer_background.unwrap();
+            assert_ne!(chosen.path, bundled.path);
+            remove_new_thread_composer_background(cx).unwrap();
+            assert_eq!(
+                current(cx).new_thread_composer_background,
+                Some(bundled.clone())
+            );
+            assert!(!Path::new(&chosen.path).exists());
+            remove_new_thread_composer_background(cx).unwrap();
+            assert!(Path::new(&bundled.path).is_file());
+            assert_eq!(
+                UiSettings::load(dir.path()).new_thread_composer_background,
+                Some(bundled)
+            );
+        });
+    }
     #[test]
     fn obsolete_steering_preference_does_not_reset_other_settings() {
         let loaded: UiSettings = serde_json::from_str(
@@ -2817,7 +2815,6 @@ mod tests {
             wallpaper_theme_colors: false,
             wallpaper_color: None,
             new_thread_background_effect: NewThreadBackgroundEffect::Ascii,
-            new_thread_background_scope: NewThreadBackgroundScope::AllSessions,
             reduce_motion: crate::motion::ReduceMotion::On,
             pause_animations_in_background: true,
             legacy_accent_color: None,
@@ -2832,7 +2829,6 @@ mod tests {
         assert!(json.contains(r#""focalX": 0.25"#));
         assert!(json.contains(r#""focalY": 0.75"#));
         assert!(json.contains(r#""zoom": 1.8"#));
-        assert!(json.contains(r#""newThreadBackgroundScope": "allSessions""#));
         assert!(json.contains(r#""reduceMotion": "on""#));
         assert!(json.contains(r#""pauseAnimationsInBackground": true"#));
         assert!(json.contains(r#""terminalFontFamily": "installed:Menlo""#));

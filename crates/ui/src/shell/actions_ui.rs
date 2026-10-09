@@ -552,6 +552,9 @@ impl Shell {
         .cloned();
         let has_imports = !snapshot.importable_actions.is_empty();
         let has_actions = !snapshot.actions.is_empty();
+        if !has_actions {
+            return None;
+        }
         let show_label = show_action_label(available_titlebar_width);
         let menu_mounted = self.project_actions.menu.get().is_some();
         let menu_closing = self.project_actions.menu.closing_since();

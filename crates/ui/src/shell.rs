@@ -314,19 +314,13 @@ fn titlebar_new_session_alpha(is_chat_route: bool, has_selected_chat: bool) -> f
 
 /// The frosted pill behind the titlebar's icon cluster keeps those controls
 /// readable over the artwork, so it appears exactly where the artwork can
-/// paint under them: the blank canvas, and — under the `AllSessions` scope —
-/// an open session too. A sidebar still covering that corner needs no pill.
+/// paint under them. A sidebar still covering that corner needs no pill.
 fn titlebar_artwork_island(
     is_chat_route: bool,
-    has_selected_chat: bool,
     sidebar_collapsed: bool,
     background_on_disk: bool,
-    scope: settings::NewThreadBackgroundScope,
 ) -> bool {
-    is_chat_route
-        && sidebar_collapsed
-        && background_on_disk
-        && (scope == settings::NewThreadBackgroundScope::AllSessions || !has_selected_chat)
+    is_chat_route && sidebar_collapsed && background_on_disk
 }
 
 /// Open the session at `slot` (zero-based) of the sidebar's active list. One
@@ -368,8 +362,8 @@ pub const TITLEBAR_IDENTITY_GAP: f32 = Theme::SPACE_MD;
 /// shift lands 6px from the top; use the same inset at the trailing edge.
 pub const TITLEBAR_ACTION_EDGE_INSET: f32 = 6.0;
 /// Width of the persistent top-left button cluster itself: a 24px sidebar
-/// trigger, an 8px group gap, then two 24px history buttons on a 2px rhythm.
-pub const CLUSTER_BUTTONS_WIDTH: f32 = 24.0 * 3.0 + TITLEBAR_GROUP_GAP + TITLEBAR_CONTROL_GAP;
+/// trigger.
+pub const CLUSTER_BUTTONS_WIDTH: f32 = 24.0;
 /// Extra width consumed when the collapsed-sidebar New Session action joins
 /// the left controls as its own group.
 pub const TITLEBAR_ACTION_SLOT_WIDTH: f32 = TITLEBAR_GROUP_GAP + 24.0;
@@ -1345,16 +1339,9 @@ fn new_thread_background_opacity(is_frost: bool) -> f32 {
 
 /// Strength the hero keeps over what the canvas is showing. The blank canvas
 /// is empty, so the image runs at full strength; once the route clock hands
-/// the canvas to a transcript under `AllSessions` it washes out, because
-/// message text now paints on top of it. The default scope never coexists
-/// with a transcript, so it stays untouched.
-fn new_thread_background_backdrop_opacity(
-    scope: crate::settings::NewThreadBackgroundScope,
-    dissolve: f32,
-) -> f32 {
-    if scope != crate::settings::NewThreadBackgroundScope::AllSessions {
-        return 1.0;
-    }
+/// the canvas to a transcript it washes out, because message text now paints
+/// on top of it.
+fn new_thread_background_backdrop_opacity(dissolve: f32) -> f32 {
     // Ride the same clock the artwork's own fade rides: it leads the
     // transcript in both directions, so the wash lands before text arrives
     // and outlives it — no brightness pop on selection or departure.
@@ -4907,12 +4894,14 @@ impl Shell {
 
     // ---- back/forward (route history) ----
 
+    #[allow(dead_code)]
     fn navigate_back(&mut self, cx: &mut Context<Self>) {
         if let Some(entry) = self.nav.back() {
             self.apply_nav(entry, cx);
         }
     }
 
+    #[allow(dead_code)]
     fn navigate_forward(&mut self, cx: &mut Context<Self>) {
         if let Some(entry) = self.nav.forward() {
             self.apply_nav(entry, cx);
@@ -6565,8 +6554,6 @@ impl Shell {
     /// through to the titlebar drag strips below.
     fn render_titlebar_cluster(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let theme = Theme::of(cx).clone();
-        let can_back = self.nav.can_back();
-        let can_forward = self.nav.can_forward();
         // The titlebar is the single owner of the new-session action in both
         // sidebar states. Hide it on the new-session canvas: opening another
         // blank canvas from an already blank canvas has no effect and used to
@@ -6576,13 +6563,11 @@ impl Shell {
         let background_settings = settings::current(cx);
         let island_target = f32::from(titlebar_artwork_island(
             matches!(self.route, Route::Chat),
-            self.state.read(cx).selected_chat.is_some() && !self.voice.read(cx).stage_open,
             self.settings.sidebar_collapsed,
             background_settings
                 .new_thread_composer_background
                 .as_ref()
                 .is_some_and(|background| std::path::Path::new(&background.path).is_file()),
-            background_settings.new_thread_background_scope,
         ));
         // Persistent manual tween: reversals start from the painted value,
         // initial presentation is settled, and reduced motion snaps.
@@ -6653,30 +6638,6 @@ impl Shell {
                 &theme,
                 cx.listener(|this, _, _, cx| this.toggle_sidebar(cx)),
             ))
-            .child(
-                div()
-                    .ml(px(TITLEBAR_GROUP_GAP))
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .gap(px(TITLEBAR_CONTROL_GAP))
-                    .child(nav_history_button(
-                        "nav-back",
-                        icons::ARROW_LEFT,
-                        "Back",
-                        can_back,
-                        &theme,
-                        cx.listener(|this, _, _, cx| this.navigate_back(cx)),
-                    ))
-                    .child(nav_history_button(
-                        "nav-forward",
-                        icons::ARROW_RIGHT,
-                        "Forward",
-                        can_forward,
-                        &theme,
-                        cx.listener(|this, _, _, cx| this.navigate_forward(cx)),
-                    )),
-            )
             .children(show_plus.then(|| {
                 div()
                     .flex_none()
@@ -10385,7 +10346,6 @@ impl Shell {
             .as_ref()
             .map(|background| background.adjustment)
             .unwrap_or_default();
-        let new_thread_background_scope = ui_settings.new_thread_background_scope;
         let frame_time = self.render_time.unwrap_or_else(std::time::Instant::now);
         // Prewarm even in an established thread. Decode/effect work is not
         // contingent on a hero measurement or a navigation gesture.
@@ -10440,48 +10400,37 @@ impl Shell {
                 ),
             )));
         let term_h = self.terminal_geometry.get().height;
-        // Under `AllSessions` the artwork is a canvas backdrop in an open
-        // session too, so the hero/thread dissolve (which hands the canvas
-        // over to a transcript) must not fade it away. It loses strength
-        // instead: message text now paints on top of it.
-        let background_dissolve =
-            new_thread_background_scope.background_dissolve(dock_frame.dissolve());
-        let new_thread_background_layer = new_thread_background_scope
-            .mounts(has_selection, dock_frame.active)
-            .then(|| {
-                if artwork_frame.active {
-                    window.request_animation_frame();
-                }
-                let width = (self.viewport_width - self.sidebar_now()).max(0.0);
-                let bounds = self.composer.read(cx).surface_bounds();
-                let opacity = new_thread_background_opacity(theme.is_frost())
-                    * new_thread_background_backdrop_opacity(
-                        new_thread_background_scope,
-                        dock_frame.dissolve(),
-                    );
-                div()
-                    .absolute()
-                    .inset_0()
-                    .child(new_thread_background(
-                        artwork_frame.previous,
-                        artwork_frame.previous_adjustment,
-                        self.viewport_height,
-                        width,
-                        bounds.clone(),
-                        background_dissolve,
-                        (1.0 - artwork_frame.mix) * opacity,
-                    ))
-                    .child(new_thread_background(
-                        artwork_frame.current,
-                        artwork_frame.current_adjustment,
-                        self.viewport_height,
-                        width,
-                        bounds,
-                        background_dissolve,
-                        artwork_frame.mix * opacity,
-                    ))
-                    .into_any_element()
-            });
+        let new_thread_background_layer = {
+            if artwork_frame.active {
+                window.request_animation_frame();
+            }
+            let width = (self.viewport_width - self.sidebar_now()).max(0.0);
+            let bounds = self.composer.read(cx).surface_bounds();
+            let opacity = new_thread_background_opacity(theme.is_frost())
+                * new_thread_background_backdrop_opacity(dock_frame.dissolve());
+            div()
+                .absolute()
+                .inset_0()
+                .child(new_thread_background(
+                    artwork_frame.previous,
+                    artwork_frame.previous_adjustment,
+                    self.viewport_height,
+                    width,
+                    bounds.clone(),
+                    0.0,
+                    (1.0 - artwork_frame.mix) * opacity,
+                ))
+                .child(new_thread_background(
+                    artwork_frame.current,
+                    artwork_frame.current_adjustment,
+                    self.viewport_height,
+                    width,
+                    bounds,
+                    0.0,
+                    artwork_frame.mix * opacity,
+                ))
+                .into_any_element()
+        };
 
         // Content outlet: selected chat → transcript; nothing selected → the
         // centered new-thread composition; no spaces at all → the onboarding
@@ -10599,7 +10548,7 @@ impl Shell {
             // The hero is deliberately outside the transcript EdgeFade below:
             // it must paint under the overlaid titlebar instead of becoming
             // fully transparent across the titlebar's inset band.
-            .children(new_thread_background_layer)
+            .child(new_thread_background_layer)
             .child(
                 // Full-height underlay: the transcript viewport spans the
                 // whole column, scrolling UNDER the titlebar above and the
@@ -12591,6 +12540,7 @@ fn linux_caption_button(
 /// A titlebar history button (zeron window-controls.tsx): enabled it is a
 /// normal window-control button; disabled it dims to 35% opacity and ignores
 /// the pointer (`disabled:pointer-events-none disabled:opacity-35`).
+#[allow(dead_code)]
 fn nav_history_button(
     id: &'static str,
     icon_path: &'static str,
@@ -13724,45 +13674,16 @@ mod tests {
     }
 
     #[test]
-    fn background_scope_decides_where_the_artwork_mounts() {
-        use crate::settings::NewThreadBackgroundScope::{AllSessions, EmptySessions};
-        // The blank new-session canvas earns the artwork under either scope.
-        assert!(EmptySessions.mounts(false, false));
-        assert!(AllSessions.mounts(false, false));
-        // Open session: the default scope only rides the route dissolve that
-        // fades the artwork out as a transcript takes over, while
-        // `AllSessions` keeps it mounted for the whole route.
-        assert!(!EmptySessions.mounts(true, false));
-        assert!(EmptySessions.mounts(true, true));
-        assert!(AllSessions.mounts(true, false));
-        // ...and only the default scope lets that handoff fade it away.
-        assert_eq!(EmptySessions.background_dissolve(1.0), 1.0);
-        assert_eq!(EmptySessions.background_dissolve(0.0), 0.0);
-        assert_eq!(AllSessions.background_dissolve(1.0), 0.0);
-        assert_eq!(AllSessions.background_dissolve(0.0), 0.0);
-    }
-
-    #[test]
-    fn transcript_washes_the_artwork_only_under_all_sessions() {
-        use crate::settings::NewThreadBackgroundScope::{AllSessions, EmptySessions};
+    fn transcript_washes_the_artwork() {
         let strength = new_thread_background_backdrop_opacity;
-        // Blank canvas (route clock at 0): full hero strength either way.
-        assert_eq!(strength(AllSessions, 0.0), 1.0);
-        assert_eq!(strength(EmptySessions, 0.0), 1.0);
-        // Transcript owns the canvas (clock at 1): `AllSessions` washes the
-        // image so message text keeps its contrast — gentler than the
-        // composer cutout's reveal of the hero, because body text is smaller.
-        let wash = strength(AllSessions, 1.0);
+        assert_eq!(strength(0.0), 1.0);
+        let wash = strength(1.0);
         assert_eq!(wash, NEW_THREAD_BACKGROUND_TRANSCRIPT_OPACITY);
         assert!(wash < crate::new_thread_background_mask::CUTOUT_REVEAL_OPACITY);
-        // Mid-handoff it slides between the two instead of popping, and an
-        // out-of-range clock clamps rather than overshoots.
-        let mid = strength(AllSessions, 0.5);
+        let mid = strength(0.5);
         assert!(wash < mid && mid < 1.0);
-        assert_eq!(strength(AllSessions, -1.0), 1.0);
-        assert_eq!(strength(AllSessions, 9.0), wash);
-        // The default scope never coexists with a transcript, so it stays.
-        assert_eq!(strength(EmptySessions, 1.0), 1.0);
+        assert_eq!(strength(-1.0), 1.0);
+        assert_eq!(strength(9.0), wash);
     }
 
     #[test]
@@ -14041,20 +13962,11 @@ mod tests {
 
     #[test]
     fn artwork_island_follows_where_the_background_can_paint() {
-        use crate::settings::NewThreadBackgroundScope::{AllSessions, EmptySessions};
         let island = titlebar_artwork_island;
-        // The blank canvas earns the pill under either scope.
-        assert!(island(true, false, true, true, EmptySessions));
-        assert!(island(true, false, true, true, AllSessions));
-        // Nothing to sit over: an open sidebar still covers that corner, a
-        // missing image paints nothing, and off the chat route no cluster is
-        // drawn at all.
-        assert!(!island(true, false, false, true, AllSessions));
-        assert!(!island(true, false, true, false, AllSessions));
-        assert!(!island(false, false, true, true, AllSessions));
-        // Open session: only `AllSessions` puts artwork under the cluster.
-        assert!(!island(true, true, true, true, EmptySessions));
-        assert!(island(true, true, true, true, AllSessions));
+        assert!(island(true, true, true));
+        assert!(!island(true, false, true));
+        assert!(!island(true, true, false));
+        assert!(!island(false, true, true));
     }
 
     #[test]
@@ -14498,7 +14410,7 @@ mod tests {
         assert_eq!(TITLEBAR_CONTROL_GAP, 2.0);
         assert_eq!(TITLEBAR_GROUP_GAP, Theme::SPACE_SM);
         assert_eq!(TITLEBAR_IDENTITY_GAP, Theme::SPACE_MD);
-        assert_eq!(CLUSTER_BUTTONS_WIDTH, 82.0);
+        assert_eq!(CLUSTER_BUTTONS_WIDTH, 24.0);
         assert_eq!(TITLEBAR_ACTION_SLOT_WIDTH, 32.0);
         assert_eq!(TITLEBAR_ACTION_EDGE_INSET, 6.0);
     }
@@ -14551,12 +14463,12 @@ mod tests {
 
     #[test]
     fn cluster_clearance_clears_the_overlay_buttons() {
-        // Linux: buttons at 10..92; a 16px-padded header needs 84 more px to
-        // put content at 92 + 8 breathing room.
-        assert_eq!(cluster_clearance(false, false, 0, 16.0), 84.0);
-        assert_eq!(cluster_clearance(false, false, 0, 10.0), 90.0);
+        // Linux: the button at 10..34; a 16px-padded header needs 26 more px to
+        // put content at 34 + 8 breathing room.
+        assert_eq!(cluster_clearance(false, false, 0, 16.0), 26.0);
+        assert_eq!(cluster_clearance(false, false, 0, 10.0), 32.0);
         // Linux with a left-side close caption: everything shifts one slot.
-        assert_eq!(cluster_clearance(false, false, 1, 16.0), 84.0 + 26.0);
+        assert_eq!(cluster_clearance(false, false, 1, 16.0), 26.0 + 26.0);
         // macOS: buttons start at the 88px traffic-light cluster start.
         assert_eq!(
             cluster_clearance(true, false, 0, 16.0),
@@ -15244,9 +15156,6 @@ mod exit_regressions {
             let terminal_size = 15.0 + index as f32;
             let code_size = 11.0 + index as f32;
             let transcript_width = 736.0 + 16.0 * index as f32;
-            // Alternates with the effect so a shell-owned save republishing
-            // stale values would revert one or the other.
-            let scope = settings::NewThreadBackgroundScope::ALL[index % 2];
             let geometry = Some(settings::WindowGeometry {
                 display_uuid: Some(uuid::Uuid::from_u128(7)),
                 x: 80.0 + index as f32,
@@ -15261,7 +15170,6 @@ mod exit_regressions {
                     shell.settings.sidebar_width = 280.0;
                     shell.schedule_save(cx);
                     settings::set_new_thread_background_effect(effect, cx);
-                    settings::set_new_thread_background_scope(scope, cx);
                     settings::update(settings::SavePolicy::Immediate, cx, |settings| {
                         settings.wallpaper_folder = Some(dir.path().join("wallpapers"));
                         settings.wallpaper_source = Some(dir.path().join("wallpapers/current.png"));
@@ -15302,7 +15210,6 @@ mod exit_regressions {
                         );
                         assert_eq!(current.window_geometry, geometry);
                         assert_eq!(current.new_thread_background_effect, effect);
-                        assert_eq!(current.new_thread_background_scope, scope);
                         assert_eq!(current.open_web_links_in_zeron, open_links_in_zeron);
                         assert_eq!(current.terminal_font_family, terminal_family);
                         assert_eq!(current.terminal_font_size, terminal_size);
@@ -15334,7 +15241,6 @@ mod exit_regressions {
                         Some(dir.path().join("wallpapers/current.png"))
                     );
                     assert_eq!(loaded.new_thread_background_effect, effect);
-                    assert_eq!(loaded.new_thread_background_scope, scope);
                     assert_eq!(loaded.open_web_links_in_zeron, open_links_in_zeron);
                     assert_eq!(loaded.terminal_font_family, terminal_family);
                     assert_eq!(loaded.terminal_font_size, terminal_size);

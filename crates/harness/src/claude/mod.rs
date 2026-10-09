@@ -46,7 +46,7 @@
 pub mod catalog;
 mod discovery;
 mod normalize;
-mod wire;
+pub(crate) mod wire;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -739,7 +739,7 @@ fn image_media_type(path: &std::path::Path, bytes: &[u8]) -> Option<&'static str
 /// Load `RunRequest::attachments` into inline image blocks, best-effort: an
 /// unreadable, oversized, or unsupported file is skipped — its path ref still
 /// rides the prompt text — never fatal to the run.
-async fn load_image_blocks(paths: &[String]) -> Vec<wire::ImageBlock> {
+pub(crate) async fn load_image_blocks(paths: &[String]) -> Vec<wire::ImageBlock> {
     use base64::Engine as _;
     let mut blocks = Vec::new();
     for path in paths {

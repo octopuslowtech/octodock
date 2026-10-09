@@ -6106,6 +6106,7 @@ pub struct Composer {
     /// The footer's rings: plan usage of the session harness's live
     /// account, and context occupancy — each opening a popover.
     account_usage: Entity<crate::account_usage::AccountUsage>,
+    turn_stats: Entity<crate::turn_stats::TurnStats>,
     /// A side chat's composer: its footer keeps only the context ring.
     side_chat: bool,
     _picker_focus: Subscription,
@@ -6192,6 +6193,7 @@ impl Composer {
         });
         let pickers = cx.new(|cx| Pickers::new(state.clone(), cx));
         let account_usage = cx.new(|cx| crate::account_usage::AccountUsage::new(state.clone(), cx));
+        let turn_stats = cx.new(|cx| crate::turn_stats::TurnStats::new(state.clone(), cx));
         // The footer toolbar (checkout kind + ref picker) is rendered INLINE
         // by the composer from picker state — a pickers-side notify (refs
         // loaded, popover toggled, pick made) must repaint the composer too.
@@ -6362,6 +6364,7 @@ impl Composer {
             _observe: observe,
             _pickers_observe: pickers_observe,
             account_usage,
+            turn_stats,
             side_chat: false,
             _picker_focus: picker_focus,
             _input_events: input_events,
@@ -11564,8 +11567,18 @@ impl Render for Composer {
                                     // their distance here.
                                     div()
                                         .flex_none()
+                                        .flex()
+                                        .items_center()
                                         .pl(px(4.0))
                                         .pr(px(10.0))
+                                        .children(
+                                            (!self.side_chat
+                                                && self
+                                                    .last_available_width
+                                                    .unwrap_or(COMPOSER_MAX_WIDTH)
+                                                    >= crate::turn_stats::MIN_COMPOSER_WIDTH)
+                                                .then(|| self.turn_stats.clone()),
+                                        )
                                         .child(self.account_usage.clone()),
                                 ),
                         )

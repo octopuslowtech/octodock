@@ -112,6 +112,7 @@ pub fn cli_name(harness: HarnessId) -> &'static str {
         HarnessId::Pi => "pi",
         HarnessId::Opencode => "opencode",
         HarnessId::Antigravity => "Antigravity",
+        HarnessId::Amp => "amp",
         HarnessId::Mock => "mock",
     }
 }
@@ -1329,6 +1330,7 @@ mod tests {
 fn install_visibility_and_hint_follow_target_capabilities() {
     for id in [
         HarnessId::Antigravity,
+        HarnessId::Amp,
         HarnessId::Codex,
         HarnessId::Opencode,
         HarnessId::ClaudeCode,

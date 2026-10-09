@@ -285,6 +285,7 @@ pub trait Harness: Send + Sync {
 
 pub mod acp;
 pub(crate) mod adapter_install;
+pub mod amp;
 pub mod archive_install;
 mod catalog;
 mod catalog_failure;
@@ -503,6 +504,7 @@ pub(crate) fn crash_message(
 }
 
 pub use acp::AcpHarness;
+pub use amp::AmpHarness;
 pub use claude::ClaudeHarness;
 pub use codex::CodexHarness;
 pub use cursor::CursorHarness;
