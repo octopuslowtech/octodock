@@ -20,7 +20,7 @@ Read `README.md` for the product overview, `ARCHITECTURE.md` for design context,
 - `crates/client/` and `crates/mobile/`: shared client state and UniFFI mobile core.
 - `crates/markdown/`, `crates/text/`, and `crates/syntax/`: parsing, layout, and highlighting.
 - `crates/voice/`, `crates/voice-media/`, `crates/voice-session/`, `crates/audio/`, `crates/orb/`, and `crates/veil/`: voice, audio, and visual support.
-- `crates/preview/`, `crates/update/`, and `crates/mcp/`: preview, updates, and MCP integration.
+- `crates/preview/` and `crates/mcp/`: preview and MCP integration.
 - `edge/`: optional cloud backend and TypeScript tests.
 - `apps/ios/`: UIKit application, Xcode project, and native tests; see its README.
 - `apps/landing/`: public website assets.
@@ -30,6 +30,7 @@ Read `README.md` for the product overview, `ARCHITECTURE.md` for design context,
 
 - Inspect the owning module and existing tests before editing. Keep changes small and follow local patterns.
 - Preserve unrelated worktree changes. Do not commit, push, release, or deploy unless requested.
+- Do not run builds or tests on your own initiative. Ask the user for approval first, naming the exact command, and wait for the answer.
 - Keep code, identifiers, file names, and commit messages in English.
 - Do not add explanatory source comments. Exceptions are shebangs, tool directives, required configuration comments, and license notices.
 - Prefer existing workspace dependencies and standard-library facilities. Do not introduce speculative abstractions or update pinned GPUI dependencies incidentally.
@@ -83,4 +84,4 @@ For desktop appearance changes, render affected states with the relevant example
 
 For mobile core changes, run relevant tests in `zeron-client`, `zeron-mobile`, `zeron-text`, and `zeron-markdown`. Native iOS builds and tests require macOS and Xcode; follow `apps/ios/README.md` and `scripts/ios/build-core.sh`. Do not claim native platform or deployed cloud behavior was verified by Linux-only checks.
 
-After code changes, run relevant tests and report what passed, failed, or could not run. Add regression tests for observable behavior, not implementation details. For documentation-only changes, validate paths, commands, references, and whitespace; a full application test run is unnecessary.
+After code changes, propose the relevant tests and run them only once the user approves; report what passed, failed, or was not run. Add regression tests for observable behavior, not implementation details. For documentation-only changes, validate paths, commands, references, and whitespace; a full application test run is unnecessary.

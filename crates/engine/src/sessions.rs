@@ -383,15 +383,6 @@ impl SessionsEngine {
             .is_some_and(|h| h.turn.background_live())
     }
 
-    /// Any run currently working or blocked on input — the auto-updater's
-    /// "don't restart from under a session" gate.
-    pub fn any_active(&self) -> bool {
-        lock(&self.inner.statuses).values().any(is_active)
-            || lock(&self.inner.runs)
-                .values()
-                .any(|r| r.voice_active.live())
-    }
-
     /// A text prompt for `chat_id` would land in the mailbox of a live
     /// turn-boundary agent mid-turn. The agent reads it only after the turn,
     /// but a mailbox delivery writes the user message now — above the reply

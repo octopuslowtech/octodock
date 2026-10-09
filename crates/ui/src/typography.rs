@@ -108,6 +108,15 @@ impl UiFontSize {
             .min_by_key(|candidate| candidate.0.abs_diff(self.0))
             .unwrap_or_default()
     }
+
+    pub fn stepped(self, delta: isize) -> Self {
+        let current = self.normalized();
+        let index = Self::ALL
+            .iter()
+            .position(|candidate| *candidate == current)
+            .unwrap_or(0);
+        Self::ALL[index.saturating_add_signed(delta).min(Self::ALL.len() - 1)]
+    }
 }
 
 impl Default for UiFontSize {
@@ -696,9 +705,21 @@ pub fn set_font_size(size: UiFontSize, window: &mut Window, cx: &mut App) -> boo
     true
 }
 
+pub fn step_font_size(delta: isize, window: &mut Window, cx: &mut App) -> bool {
+    set_font_size(font_size(cx).stepped(delta), window, cx)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ui_font_size_steps_through_choices_and_stops_at_the_ends() {
+        assert_eq!(UiFontSize::default().stepped(1).pixels(), 18.0);
+        assert_eq!(UiFontSize::default().stepped(-1).pixels(), 15.0);
+        assert_eq!(UiFontSize::ALL[0].stepped(-1), UiFontSize::ALL[0]);
+        assert_eq!(UiFontSize::ALL[6].stepped(1), UiFontSize::ALL[6]);
+    }
 
     #[test]
     fn wire_values_round_trip_and_unknown_falls_back() {

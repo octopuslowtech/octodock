@@ -11517,20 +11517,6 @@ impl Render for Composer {
                 self.pickers
                     .update(cx, |pickers, cx| pickers.render_footer(cx))
             });
-            if session_chrome_opacity > 0.0 {
-                let harness = (!self.side_chat)
-                    .then(|| self.pickers.read(cx).resolved(cx).harness)
-                    .flatten();
-                let target = {
-                    let state = self.state.read(cx);
-                    state
-                        .selected_chat_row()
-                        .map(|chat| chat.device_id.clone())
-                        .filter(|device| state.local_device_id.as_ref() != Some(device))
-                };
-                self.account_usage
-                    .update(cx, |usage, cx| usage.track(harness, target, cx));
-            }
             container.child(
                 div()
                     .w_full()

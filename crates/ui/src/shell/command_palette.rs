@@ -7,6 +7,7 @@ const RESULTS_FADE_BAND: f32 = 18.0;
 
 pub(super) struct CommandPalette {
     search: Entity<ComposerInput>,
+    projects_only: bool,
     focus: FocusHandle,
     previous_focus: Option<FocusHandle>,
     active: usize,
@@ -43,6 +44,7 @@ enum Entry {
     Settings,
     Theme(AppearanceMode),
     Chat(String),
+    Project(String),
 }
 
 impl Entry {
@@ -59,7 +61,7 @@ impl Entry {
                 },
                 mode.icon(),
             )),
-            Self::Chat(_) => None,
+            Self::Chat(_) | Self::Project(_) => None,
         }
     }
 }
@@ -93,13 +95,32 @@ impl Shell {
     }
 
     pub(super) fn toggle_command_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.command_palette.is_some() {
+        self.toggle_palette(false, window, cx);
+    }
+
+    pub(super) fn toggle_project_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.toggle_palette(true, window, cx);
+    }
+
+    fn toggle_palette(&mut self, projects_only: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(palette) = &self.command_palette {
+            let same_mode = palette.projects_only == projects_only;
             self.close_command_palette(window, cx);
-            return;
+            if same_mode {
+                return;
+            }
         }
         self.add_space = None;
         let search = cx.new(|cx| {
-            ComposerInput::with_context("Search commands and chats…", "PaletteSearch", cx)
+            ComposerInput::with_context(
+                if projects_only {
+                    "Switch project…"
+                } else {
+                    "Search commands and chats…"
+                },
+                "PaletteSearch",
+                cx,
+            )
         });
         let events = cx.subscribe(&search, |this, _, event, cx| {
             if matches!(event, ComposerInputEvent::Edited) {
@@ -113,6 +134,7 @@ impl Shell {
         let previous_focus = window.focused(cx);
         self.command_palette = Some(CommandPalette {
             search,
+            projects_only,
             focus: cx.focus_handle(),
             previous_focus,
             active: 0,
@@ -138,6 +160,33 @@ impl Shell {
             return Vec::new();
         };
         let query = palette.search.read(cx).text().trim().to_lowercase();
+        if palette.projects_only {
+            let state = self.state.read(cx);
+            let mut projects = state.projects();
+            projects.retain(|members| {
+                let space = state.representative_space(members[0]);
+                matches_query(&query, &format!("{} {}", space.display_name(), space.path))
+            });
+            projects.sort_by_key(|members| {
+                let space = members[0];
+                let recent = state
+                    .chats
+                    .iter()
+                    .filter(|chat| {
+                        chat.is_top_level() && state.project_filter(Some(&space.id))(chat)
+                    })
+                    .map(|chat| chat.last_message_at.unwrap_or(chat.created_at))
+                    .max();
+                (
+                    std::cmp::Reverse(self.project_starred(space, cx)),
+                    std::cmp::Reverse(recent),
+                )
+            });
+            return projects
+                .into_iter()
+                .map(|members| Entry::Project(members[0].id.clone()))
+                .collect();
+        }
         let mut entries = actions_for(&query, Theme::of(cx).appearance.is_dark());
         let state = self.state.read(cx);
         // Global history deliberately ignores the sidebar's project filter and
@@ -184,6 +233,34 @@ impl Shell {
         entries
     }
 
+    fn project_starred(&self, space: &zeron_proto::Space, cx: &App) -> bool {
+        self.active_sidebar_pin_profile_key(cx)
+            .and_then(|profile| self.settings.starred_projects_by_profile.get(&profile))
+            .is_some_and(|stars| stars.contains(&zeron_proto::view::project_key(space)))
+    }
+
+    fn toggle_project_star(&mut self, id: &str, cx: &mut Context<Self>) {
+        let Some(profile) = self.active_sidebar_pin_profile_key(cx) else {
+            return;
+        };
+        let Some(space) = self.state.read(cx).space_row(id) else {
+            return;
+        };
+        let key = zeron_proto::view::project_key(space);
+        let stars = self
+            .settings
+            .starred_projects_by_profile
+            .entry(profile)
+            .or_default();
+        if stars.contains(&key) {
+            stars.retain(|star| star != &key);
+        } else {
+            stars.push(key);
+        }
+        self.schedule_save(cx);
+        cx.notify();
+    }
+
     /// Pointer motion moves the highlight, so hover and keyboard never light
     /// two rows. Motion only: rows scrolling under a resting pointer must not
     /// steal the keyboard's place.
@@ -210,6 +287,27 @@ impl Shell {
             Entry::Settings => self.open_last_settings(cx),
             Entry::Theme(_) => unreachable!(),
             Entry::Chat(id) => self.open_chat(id, cx),
+            Entry::Project(id) => {
+                let latest = {
+                    let state = self.state.read(cx);
+                    state
+                        .chats
+                        .iter()
+                        .filter(|chat| {
+                            chat.is_top_level()
+                                && !chat.archived
+                                && state.project_filter(Some(&id))(chat)
+                        })
+                        .max_by_key(|chat| chat.last_message_at.unwrap_or(chat.created_at))
+                        .map(|chat| chat.id.clone())
+                };
+                self.set_space_filter(Some(id.clone()), cx);
+                if let Some(chat) = latest {
+                    self.open_chat(chat, cx);
+                } else {
+                    self.open_new_session(Some(id), cx);
+                }
+            }
         }
     }
 
@@ -230,6 +328,7 @@ impl Shell {
         let query = search.read(cx).text().to_string();
         let focus = palette.focus.clone();
         let scroll = palette.scroll.clone();
+        let projects_only = palette.projects_only;
         let theme = Theme::of(cx).for_popup();
         let action_count = entries.iter().take_while(|e| e.action().is_some()).count();
         let mut rows = Vec::new();
@@ -291,6 +390,74 @@ impl Shell {
                     .when_some(shortcut, |row, shortcut| {
                         row.child(popover::kbd_hint(&theme, &shortcut))
                     })
+                    .into_any_element()
+            } else if let Entry::Project(id) = entry {
+                let state = self.state.read(cx);
+                let space = state.space_row(id)?;
+                let starred = self.project_starred(space, cx);
+                let name = state.representative_space(space).display_name().to_string();
+                let path = space.path.clone();
+                let entry = entry.clone();
+                let star_id = id.clone();
+                popover::menu_row(&theme, ix == active, format!("project-result-{ix}"))
+                    .id(("project-result", ix))
+                    .debug_selector(move || format!("project-result-{ix}"))
+                    .rounded(px(popover::PALETTE_ITEM_RADIUS))
+                    .role(gpui::Role::Button)
+                    .aria_label(format!("Switch to {name}"))
+                    .min_h(px(44.0))
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.activate_command(entry.clone(), window, cx);
+                    }))
+                    .child(
+                        icon(icons::FOLDER)
+                            .size(px(16.0))
+                            .text_color(theme.text_muted),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .flex()
+                            .flex_col()
+                            .child(popover::search_highlight(name.into(), Some(&query), &theme))
+                            .child(
+                                div()
+                                    .truncate()
+                                    .text_size(crate::typography::ui_rems(11.0))
+                                    .text_color(theme.text_muted)
+                                    .child(path),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .id(("project-star", ix))
+                            .p(px(6.0))
+                            .cursor_pointer()
+                            .role(gpui::Role::Button)
+                            .aria_label(if starred {
+                                "Unstar project"
+                            } else {
+                                "Star project"
+                            })
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                cx.stop_propagation();
+                                this.toggle_project_star(&star_id, cx);
+                            }))
+                            .child(
+                                icon(if starred {
+                                    icons::STAR_BOLD
+                                } else {
+                                    icons::STAR
+                                })
+                                .size(px(14.0))
+                                .text_color(if starred {
+                                    theme.warning
+                                } else {
+                                    theme.text_muted
+                                }),
+                            ),
+                    )
                     .into_any_element()
             } else if let Entry::Chat(id) = entry {
                 let state = self.state.read(cx);
@@ -361,7 +528,11 @@ impl Shell {
                 el.child(palette_empty(
                     &theme,
                     "No results",
-                    "Try a command, chat title, project, or device.",
+                    if projects_only {
+                        "Try a project name or folder path."
+                    } else {
+                        "Try a command, chat title, project, or device."
+                    },
                 ))
             });
         let body = palette_results_fade(body, &scroll);
@@ -422,7 +593,14 @@ impl Shell {
             .child(palette_header(
                 &theme,
                 search.into_any_element(),
-                popover::kbd_hint(&theme, &crate::settings::badge_combo("mod-k")),
+                popover::kbd_hint(
+                    &theme,
+                    &crate::settings::badge_combo(if projects_only {
+                        &self.settings.keymap.switch_project
+                    } else {
+                        "mod-k"
+                    }),
+                ),
             ))
             .child(body)
             .child(
@@ -576,6 +754,14 @@ mod tests {
             gpui_base::init(cx);
             cx.set_global(Theme::default());
             crate::app_menus::init(cx);
+            crate::history::init(
+                Default::default(),
+                Default::default(),
+                Default::default(),
+                Default::default(),
+                cx,
+            );
+            settings::init(UiSettings::default(), dir.path(), cx);
         });
         let window = cx.add_window(|_, cx| {
             let state = cx.new(|_| AppState::new());
@@ -596,6 +782,76 @@ mod tests {
         (window, dir)
     }
 
+    #[gpui::test]
+    fn project_switcher_stars_recency_search_and_activation(cx: &mut TestAppContext) {
+        let (window, _dir) = palette_window(cx);
+        window
+            .update(cx, |shell, window, cx| {
+                shell.state.update(cx, |state, _| {
+                    state.workspace_scope = Some(WorkspaceScope::Local);
+                    state.local_device_id = Some("local".into());
+                    state.spaces = ["old", "recent", "empty"]
+                        .into_iter()
+                        .map(|id| {
+                            serde_json::from_value(serde_json::json!({
+                                "id": id, "deviceId": "local", "path": format!("/projects/{id}"),
+                                "createdAt": "2026-09-20T00:00:00Z"
+                            }))
+                            .unwrap()
+                        })
+                        .collect();
+                    let mut old = chat("old-chat", None, false, 10);
+                    old.space_id = Some("old".into());
+                    old.last_message_at = Some(old.created_at);
+                    let mut recent = chat("recent-chat", None, false, 1);
+                    recent.space_id = Some("recent".into());
+                    recent.last_message_at = Some(recent.created_at);
+                    state.apply_chats(vec![old, recent]);
+                });
+                shell.toggle_project_palette(window, cx);
+                assert_eq!(
+                    shell.command_entries(cx),
+                    vec![
+                        Entry::Project("recent".into()),
+                        Entry::Project("old".into()),
+                        Entry::Project("empty".into())
+                    ]
+                );
+                shell.toggle_project_star("old", cx);
+                assert_eq!(shell.command_entries(cx)[0], Entry::Project("old".into()));
+                shell
+                    .command_palette
+                    .as_ref()
+                    .unwrap()
+                    .search
+                    .update(cx, |input, cx| input.set_text("recent", cx));
+                assert_eq!(
+                    shell.command_entries(cx),
+                    vec![Entry::Project("recent".into())]
+                );
+                shell.activate_command(Entry::Project("recent".into()), window, cx);
+                assert!(shell.command_palette.is_none());
+                assert_eq!(
+                    shell.state.read(cx).selected_chat.as_deref(),
+                    Some("recent-chat")
+                );
+                assert_eq!(shell.settings.space_filter.as_deref(), Some("recent"));
+                shell.toggle_project_palette(window, cx);
+                shell.activate_command(Entry::Project("empty".into()), window, cx);
+                assert!(shell.state.read(cx).selected_chat.is_none());
+                assert_eq!(
+                    shell.state.read(cx).selected_space.as_deref(),
+                    Some("empty")
+                );
+                shell.toggle_project_star("old", cx);
+                shell.toggle_project_palette(window, cx);
+                assert_eq!(
+                    shell.command_entries(cx)[0],
+                    Entry::Project("recent".into())
+                );
+            })
+            .unwrap();
+    }
     fn chat(id: &str, parent: Option<&str>, archived: bool, age: i64) -> zeron_proto::Chat {
         serde_json::from_value(serde_json::json!({
             "id": id, "title": id, "deviceId": "local", "archived": archived,

@@ -469,8 +469,7 @@ impl Terminals {
         }
     }
 
-    /// Any live PTY (the reaper prunes exited ones) — restarts kill shells, so
-    /// the auto-updater waits for none.
+    /// Any live PTY (the reaper prunes exited ones).
     pub fn any_open(&self) -> bool {
         !lock(&self.inner.sessions).is_empty()
     }

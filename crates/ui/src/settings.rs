@@ -358,6 +358,12 @@ pub fn compact_model_picker(cx: &App) -> bool {
         .is_some_and(|store| store.current.compact_model_picker)
 }
 
+pub fn mascot(cx: &App) -> crate::mascot::MascotSettings {
+    cx.try_global::<SettingsStore>()
+        .map(|store| store.current.mascot.clone())
+        .unwrap_or_default()
+}
+
 /// Copy a selected image into Zeron's device-local data directory and make it
 /// the new-thread canvas background. A unique file name avoids stale image
 /// caches when the background is replaced.
@@ -852,9 +858,6 @@ pub struct UiSettings {
     pub sidebar_show_harness: bool,
     pub sidebar_show_branch: bool,
     pub sidebar_show_pull_request: bool,
-    /// The sidebar's "Star on GitHub" banner was dismissed (its close button
-    /// or following the link). Device-local; never shown again once set.
-    pub github_star_banner_dismissed: bool,
     /// The last selected space — restored on boot when the row still exists;
     /// also the new-tab default when the sidebar filter is "All".
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -872,6 +875,8 @@ pub struct UiSettings {
     /// Sidebar session filter: a space id, or `None` for "All spaces".
     #[serde(skip_serializing_if = "Option::is_none")]
     pub space_filter: Option<String>,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub starred_projects_by_profile: HashMap<String, Vec<String>>,
     /// Custom sidebar organization, isolated between account profiles on this device.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub sidebar_sections_by_profile: HashMap<String, Vec<SidebarSection>>,
@@ -1004,6 +1009,7 @@ pub struct UiSettings {
     /// Local preference: never transfers an active call or credentials.
     #[serde(default)]
     pub codex_voice_device: Option<String>,
+    pub mascot: crate::mascot::MascotSettings,
     /// Pre-theme settings used `accentColor`. Read it once, migrate to
     /// [`Self::accent`], and never write it again.
     #[serde(default, rename = "accentColor", skip_serializing)]
@@ -1027,11 +1033,11 @@ impl Default for UiSettings {
             sidebar_show_harness: true,
             sidebar_show_branch: true,
             sidebar_show_pull_request: true,
-            github_star_banner_dismissed: false,
             last_space_id: None,
             last_project_action_by_space_id: std::collections::HashMap::new(),
             open_tabs: None,
             space_filter: None,
+            starred_projects_by_profile: HashMap::new(),
             sidebar_pinned_session_ids_by_profile: HashMap::new(),
             sidebar_sections_by_profile: HashMap::new(),
             tab_order: std::collections::HashMap::new(),
@@ -1093,6 +1099,7 @@ impl Default for UiSettings {
             pause_animations_in_background: false,
             codex_voice: None,
             codex_voice_device: None,
+            mascot: Default::default(),
             legacy_accent_color: None,
         }
     }
@@ -1138,6 +1145,7 @@ pub enum ShortcutId {
     ToggleTerminal,
     NewSession,
     NewProject,
+    SwitchProject,
     OpenModelPicker,
     NextSession,
     PrevSession,
@@ -1146,7 +1154,7 @@ pub enum ShortcutId {
 }
 
 impl ShortcutId {
-    pub const ALL: [ShortcutId; 15 + JUMP_SLOTS] = [
+    pub const ALL: [ShortcutId; 16 + JUMP_SLOTS] = [
         ShortcutId::ToggleDictation,
         ShortcutId::CaptureAppshot,
         ShortcutId::RandomWallpaper,
@@ -1158,6 +1166,7 @@ impl ShortcutId {
         ShortcutId::ToggleTerminal,
         ShortcutId::NewSession,
         ShortcutId::NewProject,
+        ShortcutId::SwitchProject,
         ShortcutId::OpenModelPicker,
         ShortcutId::NextSession,
         ShortcutId::PrevSession,
@@ -1191,6 +1200,7 @@ impl ShortcutId {
             ShortcutId::ToggleTerminal => "Toggle terminal",
             ShortcutId::NewSession => "New session",
             ShortcutId::NewProject => "New project",
+            ShortcutId::SwitchProject => "Switch project",
             ShortcutId::OpenModelPicker => "Open model picker",
             ShortcutId::NextSession => "Next session or right pane tab",
             ShortcutId::PrevSession => "Previous session or right pane tab",
@@ -1220,6 +1230,8 @@ impl ShortcutId {
             ShortcutId::ToggleTerminal => "mod-j",
             ShortcutId::NewSession => "mod-n",
             ShortcutId::NewProject => "mod-shift-n",
+            ShortcutId::SwitchProject if mac => "ctrl-space",
+            ShortcutId::SwitchProject => "mod-space",
             ShortcutId::OpenModelPicker => "mod-/",
             // Ctrl+Tab on every platform — but spelled the way THAT platform's
             // recorder spells ctrl (see `combo_from_keystroke`). Off macOS
@@ -1269,6 +1281,7 @@ pub struct KeymapConfig {
     pub toggle_terminal: String,
     pub new_session: String,
     pub new_project: String,
+    pub switch_project: String,
     pub open_model_picker: String,
     pub next_session: String,
     pub prev_session: String,
@@ -1335,6 +1348,7 @@ impl Default for KeymapConfig {
             toggle_terminal: ShortcutId::ToggleTerminal.default_combo().into(),
             new_session: ShortcutId::NewSession.default_combo().into(),
             new_project: ShortcutId::NewProject.default_combo().into(),
+            switch_project: ShortcutId::SwitchProject.default_combo().into(),
             open_model_picker: ShortcutId::OpenModelPicker.default_combo().into(),
             next_session: ShortcutId::NextSession.default_combo().into(),
             prev_session: ShortcutId::PrevSession.default_combo().into(),
@@ -1358,6 +1372,7 @@ impl KeymapConfig {
             ShortcutId::ToggleTerminal => &self.toggle_terminal,
             ShortcutId::NewSession => &self.new_session,
             ShortcutId::NewProject => &self.new_project,
+            ShortcutId::SwitchProject => &self.switch_project,
             ShortcutId::OpenModelPicker => &self.open_model_picker,
             ShortcutId::NextSession => &self.next_session,
             ShortcutId::PrevSession => &self.prev_session,
@@ -1383,6 +1398,7 @@ impl KeymapConfig {
             ShortcutId::ToggleTerminal => self.toggle_terminal = combo,
             ShortcutId::NewSession => self.new_session = combo,
             ShortcutId::NewProject => self.new_project = combo,
+            ShortcutId::SwitchProject => self.switch_project = combo,
             ShortcutId::OpenModelPicker => self.open_model_picker = combo,
             ShortcutId::NextSession => self.next_session = combo,
             ShortcutId::PrevSession => self.prev_session = combo,
@@ -1672,11 +1688,11 @@ impl UiSettings {
             sidebar_show_harness,
             sidebar_show_branch,
             sidebar_show_pull_request,
-            github_star_banner_dismissed,
             last_space_id,
             last_project_action_by_space_id,
             open_tabs,
             space_filter,
+            starred_projects_by_profile,
             sidebar_sections_by_profile,
             sidebar_pinned_session_ids_by_profile,
             tab_order,
@@ -1734,6 +1750,7 @@ impl UiSettings {
             pause_animations_in_background,
             codex_voice,
             codex_voice_device,
+            mascot,
             legacy_accent_color,
         );
         current
@@ -1871,7 +1888,10 @@ impl UiSettings {
                         .get_mut("keymap")
                         .and_then(serde_json::Value::as_object_mut)
                     {
-                        for (id, field) in [(ShortcutId::ToggleFiles, "toggleFiles")] {
+                        for (id, field) in [
+                            (ShortcutId::ToggleFiles, "toggleFiles"),
+                            (ShortcutId::SwitchProject, "switchProject"),
+                        ] {
                             let default = platform_combo(id.default_combo());
                             let taken = !keymap.contains_key(field)
                                 && keymap.values().any(|existing| {
@@ -2705,7 +2725,6 @@ mod tests {
             sidebar_show_harness: false,
             sidebar_show_branch: false,
             sidebar_show_pull_request: false,
-            github_star_banner_dismissed: true,
             last_space_id: Some("space-1".into()),
             last_project_action_by_space_id: std::collections::HashMap::from([(
                 "space-1".into(),
@@ -2713,6 +2732,7 @@ mod tests {
             )]),
             open_tabs: Some(vec!["b".to_string(), "a".to_string()]),
             space_filter: Some("space-1".into()),
+            starred_projects_by_profile: HashMap::from([("local".into(), vec!["project".into()])]),
             sidebar_sections_by_profile: HashMap::new(),
             sidebar_pinned_session_ids_by_profile: HashMap::from([
                 (
@@ -2817,6 +2837,7 @@ mod tests {
             new_thread_background_effect: NewThreadBackgroundEffect::Ascii,
             reduce_motion: crate::motion::ReduceMotion::On,
             pause_animations_in_background: true,
+            mascot: Default::default(),
             legacy_accent_color: None,
         };
         settings.save(dir.path()).unwrap();

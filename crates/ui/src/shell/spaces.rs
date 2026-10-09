@@ -1276,7 +1276,7 @@ mod pinned_session_tests {
         let active = cx.debug_bounds("chat-older").unwrap();
         let archived = cx.debug_bounds("chat-archived").unwrap();
         assert_eq!(active.size, archived.size);
-        assert_eq!(cx.debug_bounds("chat-branch-archived").is_some(), !compact);
+        assert!(cx.debug_bounds("chat-branch-archived").is_some());
         assert_eq!(
             cx.debug_bounds("chat-device-archived").is_some(),
             !compact && show_label
@@ -1882,9 +1882,19 @@ mod pinned_session_tests {
 
     #[test]
     fn sidebar_hit_testing_uses_compact_and_mixed_row_heights() {
-        assert_eq!(super::row_drop_index(31.0, &[29.0, 29.0], false), Some(1));
-        assert_eq!(super::row_drop_index(61.0, &[29.0, 29.0], false), None);
-        assert_eq!(super::row_drop_index(48.0, &[45.0, 63.0], false), Some(1));
+        let gap = super::super::SIDEBAR_LIST_GAP;
+        assert_eq!(
+            super::row_drop_index(29.0 + gap, &[29.0, 29.0], false),
+            Some(1)
+        );
+        assert_eq!(
+            super::row_drop_index(59.0 + gap, &[29.0, 29.0], false),
+            None
+        );
+        assert_eq!(
+            super::row_drop_index(46.0 + gap, &[45.0, 63.0], false),
+            Some(1)
+        );
         assert_eq!(super::row_drop_index(-1.0, &[29.0], false), None);
         assert_eq!(super::row_drop_index(-1.0, &[29.0], true), Some(0));
         assert_eq!(super::row_drop_index(500.0, &[29.0, 45.0], true), Some(1));
@@ -1918,7 +1928,11 @@ mod pinned_session_tests {
         );
         assert_eq!(
             pinned_session_drop_index(
-                super::pinned_session_pointer_y(row_top, viewport_top, 63.0),
+                super::pinned_session_pointer_y(
+                    row_top,
+                    viewport_top,
+                    super::super::SIDEBAR_SESSION_SLOT
+                ),
                 3
             ),
             Some(1),

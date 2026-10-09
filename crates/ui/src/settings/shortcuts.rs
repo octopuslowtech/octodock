@@ -701,7 +701,7 @@ fn group(id: ShortcutId) -> &'static str {
         | ShortcutId::ToggleChanges
         | ShortcutId::ToggleFiles
         | ShortcutId::ToggleTerminal => "Panels",
-        ShortcutId::NewProject => "Projects",
+        ShortcutId::NewProject | ShortcutId::SwitchProject => "Projects",
         ShortcutId::ToggleDictation => "Voice",
         ShortcutId::OpenModelPicker
         | ShortcutId::NewSession
@@ -841,6 +841,45 @@ impl Render for ShortcutsPage {
                         cx.notify();
                     })),
             );
+        let mascot_enabled = crate::settings::mascot(cx).enabled;
+        let mascot_row = widgets::card_row(&theme, false)
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .child(widgets::row_title(&theme, "Mascot"))
+                    .child(widgets::meta_line(
+                        &theme,
+                        vec![
+                            div()
+                                .child("Perch an octopus on the composer. Click to poke it, drag to move it.")
+                                .into_any_element(),
+                        ],
+                    )),
+            )
+            .child(
+                widgets::toggle_switch(&theme, mascot_enabled, "mascot-enabled")
+                    .id("mascot-enabled-toggle")
+                    .tab_index(0)
+                    .role(gpui::Role::Switch)
+                    .aria_label("Mascot")
+                    .aria_toggled(if mascot_enabled {
+                        gpui::Toggled::True
+                    } else {
+                        gpui::Toggled::False
+                    })
+                    .focus_visible(|s| s.border_2().border_color(theme.accent))
+                    .cursor_pointer()
+                    .on_click(cx.listener(move |_, _, _, cx| {
+                        crate::settings::update(
+                            crate::settings::SavePolicy::Debounced,
+                            cx,
+                            |settings| settings.mascot.enabled = !mascot_enabled,
+                        );
+                        cx.refresh_windows();
+                        cx.notify();
+                    })),
+            );
         let escape_behavior_row = widgets::card_row(&theme, false)
             .child(
                 div()
@@ -903,6 +942,7 @@ impl Render for ShortcutsPage {
                                             .child(send_behavior_row)
                                             .child(compact_mode_row)
                                             .child(compact_model_picker_row)
+                                            .child(mascot_row)
                                             .child(escape_behavior_row),
                                     )
                                     .child(self.thread_naming.clone()),

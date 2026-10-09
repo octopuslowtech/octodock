@@ -627,7 +627,6 @@ pub struct EngineRpc {
     agent_accounts: AgentAccounts,
     auth: Option<Auth>,
     links: Option<std::sync::Arc<LinkCache>>,
-    updater: Option<zeron_update::Updater>,
     harness_updates: Option<crate::harness_updates::HarnessUpdateCoordinator>,
     local_import: Option<crate::local_import::LocalImporter>,
     engine_info: EngineInfo,
@@ -673,7 +672,6 @@ impl EngineRpc {
             agent_accounts,
             auth: None,
             links: None,
-            updater: None,
             harness_updates: None,
             local_import: None,
             engine_info,
@@ -697,12 +695,6 @@ impl EngineRpc {
         self
     }
 
-    /// Attach the release checker (UpdateStatus stream + ApplyUpdate).
-    pub fn with_updater(mut self, updater: zeron_update::Updater) -> Self {
-        self.updater = Some(updater);
-        self
-    }
-
     pub fn with_harness_updates(
         mut self,
         coordinator: crate::harness_updates::HarnessUpdateCoordinator,
@@ -721,12 +713,6 @@ impl EngineRpc {
         self.auth
             .as_ref()
             .ok_or_else(|| RpcError::Failed("auth unavailable".into()))
-    }
-
-    fn updater(&self) -> Result<&zeron_update::Updater, RpcError> {
-        self.updater
-            .as_ref()
-            .ok_or_else(|| RpcError::Failed("updates unavailable".into()))
     }
 
     fn harness_updates(
@@ -1368,9 +1354,7 @@ fn forward_deadline(method: &str) -> std::time::Duration {
     }
     use std::time::Duration;
     match method {
-        methods::CLONE_REPO | methods::FETCH_ALL | methods::APPLY_UPDATE => {
-            Duration::from_secs(15 * 60)
-        }
+        methods::CLONE_REPO | methods::FETCH_ALL => Duration::from_secs(15 * 60),
         methods::INSTALL_HARNESS => Duration::from_secs(15 * 60),
         // A full fleet of enabled providers is checked two at a time; each
         // provider may need both a CLI probe and a network request.
@@ -1481,8 +1465,6 @@ fn forwardable(method: &str) -> bool {
             | methods::UPLOAD_COMMIT
             | methods::READ_ATTACHMENT_CHUNK
             // Updates report/apply on the device whose binary they concern.
-            | methods::UPDATE_STATUS
-            | methods::APPLY_UPDATE
             | methods::WATCH_HARNESS_UPDATES
             | methods::CHECK_HARNESS_UPDATES
             | methods::APPLY_HARNESS_UPDATE
@@ -1506,7 +1488,6 @@ fn is_stream_method(method: &str) -> bool {
             | methods::WATCH_WORKSPACE_GIT_STATUS
             | methods::WATCH_CHECKOUT_CHANGE_REQUEST
             | methods::WATCH_WORKSPACE_FILES
-            | methods::UPDATE_STATUS
             | methods::WATCH_HARNESS_UPDATES
     )
 }
@@ -2417,15 +2398,6 @@ impl RpcService for EngineRpc {
                 Ok(RpcReply::Stream(Box::pin(futures::stream::poll_fn(
                     move |cx| rx.poll_recv(cx),
                 ))))
-            }
-            methods::UPDATE_STATUS => Ok(RpcReply::Stream(watch_stream(self.updater()?.watch()))),
-            methods::APPLY_UPDATE => {
-                let version = self
-                    .updater()?
-                    .apply()
-                    .await
-                    .map_err(|e| RpcError::Failed(format!("{e:#}")))?;
-                RpcReply::value(&serde_json::json!({ "ok": true, "version": version }))
             }
             methods::WATCH_HARNESS_UPDATES => Ok(RpcReply::Stream(watch_stream(
                 self.harness_updates()?.watch(),

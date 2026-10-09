@@ -7,7 +7,6 @@
 mod auth_cli;
 mod daemon;
 mod paths;
-mod update_cli;
 
 use clap::{Parser, Subcommand};
 
@@ -23,9 +22,6 @@ struct Cli {
     /// Open a Zeron conversation URL.
     #[arg(value_name = "URL")]
     open_url: Option<String>,
-    #[cfg(windows)]
-    #[arg(long, hide = true)]
-    wait_for_exit: Option<u32>,
 }
 
 #[derive(Subcommand)]
@@ -52,12 +48,6 @@ enum Command {
     Daemon {
         #[command(subcommand)]
         command: DaemonCommand,
-    },
-    /// Check for a newer release and apply it (download → verify → swap →
-    /// service restart). `--check` only reports (exits 1 when one is available).
-    Update {
-        #[arg(long)]
-        check: bool,
     },
 }
 
@@ -151,12 +141,6 @@ fn main() -> anyhow::Result<()> {
     #[cfg(windows)]
     attach_parent_console();
     let cli = Cli::parse();
-    #[cfg(windows)]
-    if let Some(pid) = cli.wait_for_exit {
-        zeron_update::windows::wait_for_exit(pid)?;
-    } else if matches!(&cli.command, None | Some(Command::Headless)) {
-        zeron_update::windows::cleanup_previous_image();
-    }
     // Long-running modes log at info, one-shot CLI commands at warn (RUST_LOG
     // overrides either).
     // loro's internal block-encode diagnostics log at info and flood
@@ -263,10 +247,6 @@ fn main() -> anyhow::Result<()> {
         Some(Command::Appshot) => {
             zeron_ui::appshots::request_running_appshot(&engine_config_from_env().data_dir)
                 .map_err(anyhow::Error::msg)
-        }
-        Some(Command::Update { check }) => {
-            let runtime = tokio::runtime::Runtime::new()?;
-            runtime.block_on(update_cli::update(&edge_url_from_env(), check))
         }
         Some(Command::Daemon { command }) => match command {
             DaemonCommand::Install => daemon::install(&engine_config_from_env().data_dir),

@@ -29,7 +29,6 @@ The installer starts the engine as a background service that survives reboots.
 
 ```bash
 zeron status      # local/synced mode and engine status
-zeron update      # update to the latest release
 zeron daemon start|stop|restart|status
 ```
 

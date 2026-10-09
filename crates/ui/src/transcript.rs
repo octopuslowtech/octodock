@@ -2606,6 +2606,91 @@ impl TranscriptPreparation {
     }
 }
 
+const FIND_BAR_WIDTH: f32 = 320.0;
+const FIND_BAR_HEIGHT: f32 = 32.0;
+const FIND_BAR_RADIUS: f32 = 8.0;
+
+fn push_runs_text(runs: &[InlineRun], out: &mut String) {
+    for run in runs {
+        out.push_str(&run.text);
+    }
+    out.push('\n');
+}
+
+fn push_block_text(block: &Block, out: &mut String) {
+    match block {
+        Block::Paragraph { runs } | Block::Heading { runs, .. } => push_runs_text(runs, out),
+        Block::CodeBlock { code, .. } => {
+            out.push_str(code);
+            out.push('\n');
+        }
+        Block::BlockQuote { children } => {
+            for child in children {
+                push_block_text(child, out);
+            }
+        }
+        Block::List { items, .. } => {
+            for child in items.iter().flatten() {
+                push_block_text(child, out);
+            }
+        }
+        Block::Table { header, rows, .. } => {
+            for cell in header.iter().chain(rows.iter().flatten()) {
+                push_runs_text(cell, out);
+            }
+        }
+        Block::Rule => {}
+    }
+}
+
+fn row_find_text(row: &Row) -> String {
+    let mut text = String::new();
+    match &row.kind {
+        RowKind::User { text: prompt, .. } => text.push_str(prompt),
+        RowKind::Markdown { tree, block_ix } | RowKind::LiveMarkdown { tree, block_ix } => {
+            if let Some(top) = tree.blocks.get(*block_ix) {
+                push_block_text(&top.block, &mut text);
+            }
+        }
+        RowKind::ToolGroup {
+            tools,
+            compact_shell: false,
+            ..
+        } => {
+            for tool in tools.iter().filter(|tool| tool.kind == ToolItemKind::Call) {
+                let (label, detail) = tool_chip_content(&tool.call);
+                text.push_str(label);
+                text.push(' ');
+                text.push_str(&detail);
+                text.push('\n');
+            }
+        }
+        RowKind::ErrorChip { message } => text.push_str(message),
+        _ => {}
+    }
+    text
+}
+
+pub fn find_matches(rows: &[Row], query: &str) -> Vec<usize> {
+    let query = query.trim().to_lowercase();
+    if query.is_empty() {
+        return Vec::new();
+    }
+    rows.iter()
+        .enumerate()
+        .filter(|(_, row)| row_find_text(row).to_lowercase().contains(&query))
+        .map(|(ix, _)| ix)
+        .collect()
+}
+
+struct TranscriptFind {
+    input: Entity<crate::composer::ComposerInput>,
+    matches: Vec<usize>,
+    current: usize,
+    return_focus: Option<gpui::FocusHandle>,
+    _events: Subscription,
+}
+
 struct CachedRows {
     fingerprint: u64,
     rows: Vec<Row>,
@@ -3349,6 +3434,7 @@ pub struct Transcript {
     /// recently (click "Show full output" after a diff → see the output).
     blob_fetch_order: HashMap<SharedString, u64>,
     blob_fetch_counter: u64,
+    find: Option<TranscriptFind>,
     _observe: Subscription,
     _text_changes: Subscription,
 }
@@ -3634,6 +3720,7 @@ impl Transcript {
             blob_details: HashMap::new(),
             blob_fetch_order: HashMap::new(),
             blob_fetch_counter: 0,
+            find: None,
             _observe: observe,
             _text_changes: text_changes,
         };
@@ -4498,6 +4585,266 @@ impl Transcript {
         self.engage_pin(cx);
     }
 
+    pub(crate) fn open_find(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.chat_id.is_none() {
+            return;
+        }
+        let existing = self.find.as_ref().map(|find| find.input.clone());
+        let input = match existing {
+            Some(input) => input,
+            None => {
+                let input = cx.new(|cx| {
+                    crate::composer::ComposerInput::with_context(
+                        "Find in chat",
+                        "PaletteSearch",
+                        cx,
+                    )
+                    .with_text_metrics(12.0, 16.0)
+                    .with_single_line()
+                });
+                let events = cx.subscribe(&input, |this: &mut Self, _, event, cx| {
+                    if matches!(event, crate::composer::ComposerInputEvent::Edited) {
+                        this.find_query_changed(cx);
+                    }
+                });
+                self.find = Some(TranscriptFind {
+                    input: input.clone(),
+                    matches: Vec::new(),
+                    current: 0,
+                    return_focus: window.focused(cx),
+                    _events: events,
+                });
+                input
+            }
+        };
+        input.update(cx, |input, cx| input.select_all_text(cx));
+        let focus = gpui::Focusable::focus_handle(input.read(cx), cx);
+        window.on_next_frame(move |window, cx| {
+            window.focus(&focus, cx);
+        });
+        cx.notify();
+    }
+
+    fn close_find(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(find) = self.find.take() {
+            if let Some(focus) = find.return_focus {
+                window.focus(&focus, cx);
+            }
+            cx.notify();
+        }
+    }
+
+    fn refresh_find(&mut self, cx: &gpui::App) {
+        let Some(find) = self.find.as_mut() else {
+            return;
+        };
+        let mut matches = find_matches(&self.rows, find.input.read(cx).text());
+        matches.retain(|&ix| {
+            self.rows[ix].compact_fold.as_ref().is_none_or(|fold| {
+                self.folds
+                    .get(fold)
+                    .is_some_and(|state| state.open == Some(true))
+            })
+        });
+        find.current = find.current.min(matches.len().saturating_sub(1));
+        find.matches = matches;
+    }
+
+    fn find_query_changed(&mut self, cx: &mut Context<Self>) {
+        self.refresh_find(cx);
+        let top = self.list.logical_scroll_top().item_ix;
+        if let Some(find) = self.find.as_mut() {
+            find.current = find
+                .matches
+                .iter()
+                .position(|&ix| ix >= top)
+                .unwrap_or(find.matches.len().saturating_sub(1));
+        }
+        self.reveal_find_match(cx);
+    }
+
+    fn step_find(&mut self, forward: bool, cx: &mut Context<Self>) {
+        let Some(find) = self.find.as_mut() else {
+            return;
+        };
+        let len = find.matches.len();
+        if len == 0 {
+            return;
+        }
+        find.current = if forward {
+            (find.current + 1) % len
+        } else {
+            (find.current + len - 1) % len
+        };
+        self.reveal_find_match(cx);
+    }
+
+    fn find_bar_top(&self) -> f32 {
+        if self.doc_override.is_some() {
+            8.0
+        } else {
+            Theme::TITLEBAR_HEIGHT + 8.0
+        }
+    }
+
+    fn reveal_find_match(&mut self, cx: &mut Context<Self>) {
+        cx.notify();
+        let Some(ix) = self
+            .find
+            .as_ref()
+            .and_then(|find| find.matches.get(find.current).copied())
+        else {
+            return;
+        };
+        if let Some(row) = self.rows.get(ix)
+            && matches!(row.kind, RowKind::ToolGroup { .. })
+        {
+            self.folds.entry(row.id.clone()).or_default().open = Some(true);
+        }
+        self.begin_scroll_navigation();
+        self.list.scroll_to(ListOffset {
+            item_ix: ix,
+            offset_in_item: px(-(self.find_bar_top() + FIND_BAR_HEIGHT + 8.0)),
+        });
+        self.viewport_finalize_pending = true;
+    }
+
+    fn on_find_key(
+        &mut self,
+        event: &gpui::KeyDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match event.keystroke.key.as_str() {
+            "enter" => self.step_find(!event.keystroke.modifiers.shift, cx),
+            "escape" => self.close_find(window, cx),
+            _ => return,
+        }
+        cx.stop_propagation();
+    }
+
+    fn find_button(
+        id: &'static str,
+        icon: &'static str,
+        label: &'static str,
+        theme: &Theme,
+        on_click: impl Fn(&mut Self, &mut Window, &mut Context<Self>) + 'static,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        div()
+            .id(id)
+            .size(px(24.0))
+            .flex_none()
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded(px(6.0))
+            .cursor_pointer()
+            .aria_label(label)
+            .hover(|style| style.bg(crate::theme::ink(0.08)))
+            .on_mouse_down(MouseButton::Left, |_, window, _| window.prevent_default())
+            .on_click(cx.listener(move |this, _, window, cx| on_click(this, window, cx)))
+            .child(
+                crate::icons::icon(icon)
+                    .size(px(11.0))
+                    .text_color(theme.text_muted),
+            )
+    }
+
+    fn render_find_bar(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let find = self.find.as_ref()?;
+        let input = find.input.clone();
+        let count: SharedString = if input.read(cx).text().trim().is_empty() {
+            SharedString::default()
+        } else if find.matches.is_empty() {
+            "No results".into()
+        } else {
+            format!("{}/{}", find.current + 1, find.matches.len()).into()
+        };
+        let theme = Theme::of(cx).for_popup();
+        let glass = theme.is_frost();
+        let bar = div()
+            .id("transcript-find")
+            .w(px(FIND_BAR_WIDTH))
+            .h(px(FIND_BAR_HEIGHT))
+            .flex()
+            .items_center()
+            .gap(px(4.0))
+            .pl(px(10.0))
+            .pr(px(4.0))
+            .rounded(px(FIND_BAR_RADIUS))
+            .border_1()
+            .border_color(theme.border)
+            .bg(if glass {
+                crate::popover::surface_bg(&theme)
+            } else {
+                theme.surface_raised
+            })
+            .when(!glass, |el| el.shadow_md())
+            .occlude()
+            .on_key_down(cx.listener(Self::on_find_key))
+            .child(
+                crate::icons::icon(crate::icons::MAGNIFER)
+                    .size(px(12.0))
+                    .flex_none()
+                    .text_color(theme.text_faint),
+            )
+            .child(
+                div()
+                    .h(px(16.0))
+                    .flex_1()
+                    .min_w_0()
+                    .flex()
+                    .items_center()
+                    .overflow_hidden()
+                    .child(input),
+            )
+            .child(
+                div()
+                    .flex_none()
+                    .px(px(4.0))
+                    .text_size(px(11.5))
+                    .text_color(theme.text_muted)
+                    .child(count),
+            )
+            .child(Self::find_button(
+                "transcript-find-prev",
+                crate::icons::ARROW_UP,
+                "Previous match",
+                &theme,
+                |this, _, cx| this.step_find(false, cx),
+                cx,
+            ))
+            .child(Self::find_button(
+                "transcript-find-next",
+                crate::icons::ARROW_DOWN,
+                "Next match",
+                &theme,
+                |this, _, cx| this.step_find(true, cx),
+                cx,
+            ))
+            .child(Self::find_button(
+                "transcript-find-close",
+                crate::icons::CLOSE,
+                "Close find",
+                &theme,
+                |this, window, cx| this.close_find(window, cx),
+                cx,
+            ));
+        Some(
+            div()
+                .absolute()
+                .top(px(self.find_bar_top()))
+                .right(px(24.0))
+                .child(crate::frost::frosted(
+                    FIND_BAR_RADIUS,
+                    crate::frost::MENU_BLUR,
+                    bar,
+                ))
+                .into_any_element(),
+        )
+    }
+
     /// Re-engage the bottom pin with a glide. Long jumps teleport to within
     /// [`GLIDE_MAX_VIEWPORTS`] of the end first (mugen `springToBottom`);
     /// reduced motion snaps.
@@ -5156,6 +5503,7 @@ impl Transcript {
                 self.spring_kick = true;
             }
         }
+        self.refresh_find(cx);
         cx.notify();
     }
 
@@ -7517,6 +7865,14 @@ impl Transcript {
                 })
         });
         let entry_id = row.entry_id.clone();
+        let find_tint = self.find.as_ref().and_then(|find| {
+            let position = find.matches.binary_search(&ix).ok()?;
+            Some(if position == find.current {
+                theme.accent_wash
+            } else {
+                theme.ink(0.05)
+            })
+        });
         let row_id = row.id.clone();
         let outer = div()
             .id(row.id.clone())
@@ -7557,6 +7913,7 @@ impl Transcript {
                     .w_full()
                     .max_w(px(self.content_width))
                     .min_w_0()
+                    .when_some(find_tint, |el, tint| el.bg(tint).rounded(px(6.0)))
                     .child(inner)
                     .children(strip)
                     .children(trailer),
@@ -10212,6 +10569,7 @@ impl Render for Transcript {
             .child(content)
             .child(rail);
         let root = root.children(self.render_image_menu(cx));
+        let root = root.children(self.render_find_bar(cx));
         // Full-size viewer for a clicked user-bubble thumbnail
         // (AttachmentPreviewDialog: bare lightbox, click closes).
         if let Some(preview) = self.attachment_preview.clone() {
@@ -11357,6 +11715,30 @@ mod tests {
 
         // Ordinary transcript updates retain the existing spring behavior.
         assert!(!should_anchor_live_stream(true, 0.0, false));
+    }
+
+    #[test]
+    fn find_matches_prompt_and_reply_rows_case_insensitively() {
+        let mut prompt = viewport_row("prompt", "entry-a");
+        prompt.kind = RowKind::User {
+            text: "Fix the Parser".into(),
+            mentions: Arc::default(),
+            attachments: Arc::default(),
+            badges: Arc::default(),
+            pending: false,
+        };
+        let tree = Arc::new(parse_full("Nothing here.\n\n```rust\nlet parser = 1;\n```"));
+        let mut prose = viewport_row("prose", "entry-b");
+        prose.kind = RowKind::Markdown {
+            tree: tree.clone(),
+            block_ix: 0,
+        };
+        let mut code = viewport_row("code", "entry-b");
+        code.kind = RowKind::Markdown { tree, block_ix: 1 };
+        let rows = vec![prompt, prose, code];
+
+        assert_eq!(find_matches(&rows, " PARSER "), vec![0, 2]);
+        assert!(find_matches(&rows, "  ").is_empty());
     }
 
     fn viewport_row(id: &str, entry_id: &str) -> Row {

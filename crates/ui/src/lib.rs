@@ -14,7 +14,6 @@
 
 mod account_usage;
 pub mod app_menus;
-pub mod app_update;
 pub mod appearance;
 pub mod appshots;
 pub mod attachments;
@@ -42,6 +41,7 @@ pub(crate) mod image_viewer;
 pub mod links;
 pub mod loaders;
 pub mod markdown;
+pub mod mascot;
 pub mod motion;
 mod new_thread_background_effects;
 mod new_thread_background_image;
@@ -58,6 +58,8 @@ mod roll_text;
 pub mod running_pill;
 pub mod settings;
 pub mod shell;
+mod sidebar_usage;
+mod usage_panel;
 pub mod sound;
 pub mod state;
 pub(crate) mod surface_chrome;
@@ -201,7 +203,6 @@ pub fn run_app(config: UiConfig) {
         appshots::set_enabled(ui_settings.appshots_enabled);
         terminal::panel::init(cx);
         app_menus::init(cx);
-        app_update::AppUpdate::init(config.boot().edge_url, data_dir.clone(), cx);
         cx.register_url_scheme("zeron").detach();
 
         let state = cx.new(|cx| {
@@ -236,7 +237,6 @@ pub fn run_app(config: UiConfig) {
         let quit_state = state.clone();
         cx.on_app_quit(move |cx| {
             settings::flush(cx);
-            app_update::install_on_quit(cx);
             let shutdown =
                 quit_state.read(cx).engine().cloned().map(|handle| {
                     gpui_tokio::Tokio::spawn(cx, async move { handle.shutdown().await })

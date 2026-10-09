@@ -65,6 +65,16 @@ fn main() -> anyhow::Result<()> {
                 chat.created_at = chrono::Utc::now() - chrono::Duration::minutes((ix as i64 + 1) * 17);
                 s.chats.push(chat);
             }
+            if std::env::var_os("ZERON_FIXTURE_PROJECT_SWITCHER").is_some() {
+                for (id, name, age) in [("zeron", "Zeron", 5), ("atlas", "Atlas", 30), ("notes", "Notes", 90)] {
+                    s.spaces.push(serde_json::from_value(serde_json::json!({"id":id,"name":name,"deviceId":"local","path":format!("/projects/{id}"),"createdAt":"2026-09-08T00:00:00Z"})).unwrap());
+                    let mut chat = s.chats[0].clone();
+                    chat.id = format!("{id}-chat");
+                    chat.space_id = Some(id.into());
+                    chat.last_message_at = Some(chrono::Utc::now() - chrono::Duration::minutes(age));
+                    s.chats.push(chat);
+                }
+            }
             s
         });
         let boot = EngineBootConfig { data_dir: data, ipc_port: 0, edge_url: String::new(), edge_token: None, org_id: None, workos_client_id: None, default_harness: HarnessId::ClaudeCode };
@@ -75,6 +85,10 @@ fn main() -> anyhow::Result<()> {
             ..Default::default()
         }, |_, cx| cx.new(|cx| shell::Shell::new(state.clone(), boot, cx))).unwrap();
         cx.spawn(async move |cx| {
+            if std::env::var_os("ZERON_FIXTURE_PROJECT_SWITCHER").is_some() {
+                cx.background_executor().timer(std::time::Duration::from_millis(1000)).await;
+                let _ = window.update(cx, |_, window, cx| window.dispatch_action(Box::new(shell::SwitchProject), cx));
+            }
             loop {
                 cx.background_executor().timer(std::time::Duration::from_millis(100)).await;
                 if window.update(cx, |shell, _, cx| shell.fixture_project_responses(cx)).is_err() { break; }

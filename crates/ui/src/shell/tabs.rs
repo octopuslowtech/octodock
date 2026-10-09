@@ -112,6 +112,7 @@ impl Shell {
             || self.delete_space_confirm.is_some()
             || self.chat_rename.is_some()
             || self.rename_space_dialog.is_some()
+            || self.usage_dialog.is_some()
             || self.discard_working_tree.is_some()
             || self.chat_menu.get().is_some()
             || self.space_menu.get().is_some()
@@ -146,6 +147,18 @@ impl Shell {
         if self.right_pane_open(cx) {
             self.activate_right_surface(self.resolved_right_active(cx), window, cx);
         } else {
+            self.navigation_focus.right_was_focused = false;
+            window.focus(&self.composer.focus_handle(cx), cx);
+        }
+    }
+
+    pub(super) fn focus_prompt(
+        &mut self,
+        _: &FocusPrompt,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if matches!(self.route, Route::Chat) && !self.navigation_overlay_open(cx) {
             self.navigation_focus.right_was_focused = false;
             window.focus(&self.composer.focus_handle(cx), cx);
         }
@@ -533,7 +546,7 @@ impl Shell {
                                         self.reduced_motion,
                                     ),
                                     true,
-                                    16.0,
+                                    TITLEBAR_ICON_SIZE,
                                     theme.text_muted,
                                 ),
                                 ShortcutId::ToggleChanges.label(),

@@ -151,11 +151,6 @@ pub struct EngineCore {
     auth: std::sync::Mutex<Option<Auth>>,
     /// Peer link cache for `targetDeviceId` routing (attached when edge+auth are ready).
     links: std::sync::Mutex<Option<Arc<zeron_rpc::LinkCache>>>,
-    /// Release checker (attached by [`Engine::assemble_runtime`]) — the
-    /// UpdateStatus stream + ApplyUpdate.
-    updater: std::sync::Mutex<Option<zeron_update::Updater>>,
-    /// The updater's token-change wake forwarder — owned so shutdown can end it.
-    updater_wake: std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
     /// Exclusive data-dir lock — held for the engine's lifetime (single-instance).
     _instance_lock: InstanceLock,
 }
@@ -342,8 +337,6 @@ impl EngineCore {
             workspace_scope: profile.scope(),
             auth: std::sync::Mutex::new(None),
             links: std::sync::Mutex::new(None),
-            updater: std::sync::Mutex::new(None),
-            updater_wake: std::sync::Mutex::new(None),
             _instance_lock: lock,
         })
     }
@@ -391,28 +384,6 @@ impl EngineCore {
 
     pub fn links(&self) -> Option<Arc<zeron_rpc::LinkCache>> {
         self.links
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone()
-    }
-
-    /// Attach the release checker (before building the RPC service).
-    pub fn set_updater_wake(&self, handle: tokio::task::JoinHandle<()>) {
-        *self
-            .updater_wake
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(handle);
-    }
-
-    pub fn set_updater(&self, updater: zeron_update::Updater) {
-        *self
-            .updater
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(updater);
-    }
-
-    pub fn updater(&self) -> Option<zeron_update::Updater> {
-        self.updater
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone()
@@ -475,9 +446,6 @@ impl EngineCore {
         if let Some(links) = self.links() {
             rpc = rpc.with_links(links);
         }
-        if let Some(updater) = self.updater() {
-            rpc = rpc.with_updater(updater);
-        }
         if let Some(importer) = self.local_import.clone() {
             rpc = rpc.with_local_import(importer);
         }
@@ -510,26 +478,6 @@ impl EngineCore {
         self.terminals.shutdown();
         self.agent_accounts.shutdown();
         self.change_requests.shutdown();
-        // Cancel + await every worker that can reach Edge before flushing: a
-        // replaced synced runtime must not keep polling releases or draining
-        // the attachment outbox under the old identity after Local boots.
-        let wake = self
-            .updater_wake
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .take();
-        if let Some(wake) = wake {
-            wake.abort();
-            let _ = wake.await;
-        }
-        let updater = self
-            .updater
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .take();
-        if let Some(updater) = updater {
-            updater.shutdown().await;
-        }
         self.diff_sync.shutdown().await;
         self.workspace_files.shutdown().await;
         self.spaces_sync.shutdown().await;
@@ -815,28 +763,6 @@ impl Engine {
             tokens: Arc::new(auth.clone()),
         });
         core.previews.start(projects, preview_signaling).await;
-        // Release checker: polls {edge}/releases hourly (wall clock); headless
-        // installs with ZERON_AUTO_UPDATE=1 apply + restart themselves — gated
-        // on quiescence so a restart never lands under a live run or open PTY.
-        // Spawned for every install: application updates must not depend on
-        // workspace sync being enabled — the feed is the public release feed
-        // (served without authentication), not an edge feature.
-        let quiescent: zeron_update::QuiescentCheck = {
-            let sessions = core.sessions.clone();
-            let terminals = core.terminals.clone();
-            Arc::new(move || !sessions.any_active() && !terminals.any_open())
-        };
-        let updater = zeron_update::Updater::spawn(config.edge_url.clone(), Some(quiescent));
-        if let Some(mut token_changes) = edge.as_ref().and_then(EdgeConfig::token_changes) {
-            let updater_for_tokens = updater.clone();
-            let wake = tokio::spawn(async move {
-                while token_changes.changed().await.is_ok() {
-                    updater_for_tokens.check_now();
-                }
-            });
-            core.set_updater_wake(wake);
-        }
-        core.set_updater(updater);
         tracing::info!(device_id = %core.device_id, "engine core assembled");
         // Managed ACP adapters install in the background at boot (agents
         // whose CLI is present but whose adapter isn't yet), so a first chat
@@ -894,11 +820,6 @@ impl Engine {
             .ok_or_else(|| EngineError::Other("synced workspace profile is not ready".into()))?;
 
         let runtime = Self::assemble_runtime(&config, auth, profile).await?;
-        // The desktop app or `zeron update` may install a newer binary under
-        // a running service; restart into it once no run or terminal is live.
-        if let Some(updater) = runtime.core().updater() {
-            updater.restart_when_superseded();
-        }
 
         // A daemon exists to serve this port, so a bind failure is fatal here —
         // unlike the headed app, which can still work over its in-process
@@ -947,8 +868,8 @@ async fn wait_for_signed_out(state: &mut tokio::sync::watch::Receiver<AuthState>
     }
 }
 
-/// Ctrl-C or SIGTERM. systemd/launchd stop (and the auto-updater's service
-/// restart) deliver SIGTERM — without catching it the daemon dies mid-write
+/// Ctrl-C or SIGTERM. systemd/launchd stop delivers SIGTERM — without
+/// catching it the daemon dies mid-write
 /// and every stop takes the crash-recovery path instead of the graceful drain.
 async fn shutdown_signal() -> std::io::Result<()> {
     #[cfg(unix)]

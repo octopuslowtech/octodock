@@ -22,7 +22,6 @@ actions!(
     zeron,
     [
         About,
-        CheckForUpdates,
         Quit,
         Hide,
         HideOthers,
@@ -44,9 +43,6 @@ pub fn init(cx: &mut App) {
     cx.on_action(quit);
     #[cfg(target_os = "macos")]
     cx.on_action(|_: &About, _| about_panel::show());
-    // Global, not per-window: it must work with every window closed, and the
-    // update lifecycle is app-wide (see `app_update`).
-    cx.on_action(|_: &CheckForUpdates, cx| crate::app_update::check_for_updates(cx));
     // Application-menu verbs — gpui wraps NSApp `hide` / `hideOtherApplications`
     // / `unhideAllApplications` (zed registers the same trio in
     // crates/zed/src/zed.rs `init`).
@@ -170,9 +166,6 @@ pub fn app_menus() -> Vec<Menu> {
     let mut app_items = vec![
         // The native AppKit about panel; no equivalent elsewhere yet.
         MenuItem::action("About Zeron", About).disabled(!macos),
-        // Sparkle's placement: directly under About. Other platforms reach
-        // the same check from the account menu.
-        MenuItem::action("Check for Updates…", CheckForUpdates),
         MenuItem::separator(),
         MenuItem::action("Settings", shell::OpenSettings),
         MenuItem::separator(),
@@ -275,23 +268,6 @@ mod tests {
         };
         assert_eq!(action.name(), About.name());
         assert_eq!(first.is_disabled(), !cfg!(target_os = "macos"));
-    }
-
-    #[test]
-    fn check_for_updates_follows_about() {
-        let menus = app_menus();
-        let Some(MenuItem::Action {
-            name,
-            action,
-            disabled,
-            ..
-        }) = menus[0].items.get(1)
-        else {
-            panic!("second app-menu item must be an action");
-        };
-        assert_eq!(name.as_ref(), "Check for Updates…");
-        assert_eq!(action.name(), CheckForUpdates.name());
-        assert!(!disabled);
     }
 
     #[test]

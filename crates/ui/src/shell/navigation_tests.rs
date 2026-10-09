@@ -20,12 +20,17 @@ impl Render for NavigationHost {
             });
             let main = shell.render_main(window, 400., 400., cx);
             let right = shell.render_right_pane(window, cx);
+            let palette = shell.render_command_palette(window.viewport_size(), window, cx);
             div()
                 .size_full()
                 .flex()
                 .flex_col()
                 .track_focus(&shell.shortcut_focus)
                 .child(div().track_focus(&shell.unfocused))
+                .on_action(cx.listener(Shell::focus_prompt))
+                .on_action(cx.listener(|shell, _: &SwitchProject, window, cx| {
+                    shell.toggle_project_palette(window, cx)
+                }))
                 .on_action(cx.listener(|shell, _: &NextSession, window, cx| {
                     shell.cycle_navigation(true, window, cx);
                 }))
@@ -48,10 +53,55 @@ impl Render for NavigationHost {
                         )
                         .when(shell.right_pane_open(cx), |el| el.child(right)),
                 )
+                .children(palette)
         })
     }
 }
 
+#[gpui::test]
+fn project_switcher_opens_with_default_and_custom_shortcuts(cx: &mut TestAppContext) {
+    let (shell, cx) = setup(cx);
+    cx.simulate_keystrokes("ctrl-space");
+    cx.update(|window, cx| {
+        window.draw(cx).clear();
+        assert!(shell.read(cx).command_palette.is_some());
+    });
+    cx.simulate_keystrokes("escape");
+    cx.update(|_, cx| {
+        assert!(shell.read(cx).command_palette.is_none());
+        shell.update(cx, |shell, cx| {
+            shell.state.update(cx, |state, _| {
+                state.spaces = ["alpha", "beta"]
+                    .into_iter()
+                    .map(|id| {
+                        serde_json::from_value(serde_json::json!({
+                            "id": id, "deviceId": "local", "path": format!("/projects/{id}"),
+                            "createdAt": "2026-09-20T00:00:00Z"
+                        }))
+                        .unwrap()
+                    })
+                    .collect();
+            });
+        });
+    });
+    cx.simulate_keystrokes("ctrl-space");
+    cx.update(|window, cx| window.draw(cx).clear());
+    cx.simulate_input("bet");
+    cx.update(|window, cx| window.draw(cx).clear());
+    cx.simulate_keystrokes("enter");
+    cx.update(|_, cx| {
+        let shell = shell.read(cx);
+        assert!(shell.command_palette.is_none());
+        assert_eq!(shell.settings.space_filter.as_deref(), Some("beta"));
+        let mut keymap = KeymapConfig::default();
+        keymap.switch_project = "alt-p".into();
+        apply_keymap(cx, &keymap, ComposerSendBehavior::default());
+    });
+    cx.simulate_keystrokes("ctrl-space");
+    shell.read_with(cx, |shell, _| assert!(shell.command_palette.is_none()));
+    cx.simulate_keystrokes("alt-p");
+    shell.read_with(cx, |shell, _| assert!(shell.command_palette.is_some()));
+}
 fn setup(cx: &mut TestAppContext) -> (Entity<Shell>, &mut VisualTestContext) {
     let dir = tempfile::tempdir().unwrap();
     cx.update(|cx| {
@@ -145,6 +195,46 @@ fn assert_surface(shell: &Entity<Shell>, cx: &mut VisualTestContext, surface: Ri
             Some("parent")
         );
         assert!(shell.navigation_focus.in_right(window, cx));
+    });
+}
+
+#[gpui::test]
+fn ctrl_l_focuses_current_prompt_without_changing_session(cx: &mut TestAppContext) {
+    let (shell, cx) = setup(cx);
+    let tab = cx.debug_bounds("right-surface-tab-0").unwrap().center();
+    cx.simulate_click(tab, gpui::Modifiers::default());
+    cx.update(|window, cx| {
+        assert!(shell.read(cx).navigation_focus.in_right(window, cx));
+    });
+    cx.simulate_keystrokes("ctrl-l");
+    cx.update(|window, cx| {
+        window.draw(cx).clear();
+        let shell = shell.read(cx);
+        assert!(shell.composer.focus_handle(cx).is_focused(window));
+        assert_eq!(
+            shell.state.read(cx).selected_chat.as_deref(),
+            Some("parent")
+        );
+        assert_eq!(shell.resolved_right_active(cx), RightSurface::Subagent(1));
+    });
+    cx.update(|window, cx| {
+        shell.update(cx, |shell, cx| {
+            shell.add_browser_surface(None, window, cx);
+        });
+        window.draw(cx).clear();
+    });
+    cx.simulate_keystrokes("ctrl-l");
+    cx.update(|window, cx| {
+        assert!(shell.read(cx).composer.focus_handle(cx).is_focused(window));
+        shell.update(cx, |shell, cx| {
+            shell.activate_right_surface(RightSurface::Subagent(1), window, cx);
+            shell.delete_confirm = Some("parent".into());
+        });
+        window.draw(cx).clear();
+    });
+    cx.simulate_keystrokes("ctrl-l");
+    cx.update(|window, cx| {
+        assert!(!shell.read(cx).composer.focus_handle(cx).is_focused(window));
     });
 }
 

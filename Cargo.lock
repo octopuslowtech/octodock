@@ -12958,7 +12958,6 @@ dependencies = [
  "zeron-mcp",
  "zeron-rpc",
  "zeron-ui",
- "zeron-update",
 ]
 
 [[package]]
@@ -13050,7 +13049,6 @@ dependencies = [
  "zeron-proto",
  "zeron-rpc",
  "zeron-sync",
- "zeron-update",
  "zip",
 ]
 
@@ -13350,27 +13348,10 @@ dependencies = [
  "zeron-rpc",
  "zeron-syntax",
  "zeron-theme",
- "zeron-update",
  "zeron-veil",
  "zeron-voice",
  "zeron-voice-media",
  "zeron-voice-session",
-]
-
-[[package]]
-name = "zeron-update"
-version = "0.2.107"
-dependencies = [
- "anyhow",
- "futures",
- "reqwest",
- "serde",
- "serde_json",
- "sha2",
- "tempfile",
- "tokio",
- "tracing",
- "windows-sys 0.61.2",
 ]
 
 [[package]]

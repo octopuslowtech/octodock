@@ -107,12 +107,17 @@ actions!(
         ToggleFiles,
         AddSpacePalette,
         ToggleCommandPalette,
+        SwitchProject,
         OpenModelPicker,
         NewSession,
+        FocusPrompt,
         OpenSettings,
         NextSession,
         PrevSession,
-        ArchiveSession
+        ArchiveSession,
+        IncreaseUiFontSize,
+        DecreaseUiFontSize,
+        FindInChat
     ]
 );
 
@@ -372,6 +377,11 @@ pub const TITLEBAR_ACTION_SLOT_WIDTH: f32 = TITLEBAR_GROUP_GAP + 24.0;
 /// spacer shifts every control while leaving the declared cluster geometry
 /// unchanged.
 const TITLEBAR_CLUSTER_PAD: f32 = 10.0;
+const TITLEBAR_ICON_SIZE: f32 = if cfg!(target_os = "linux") {
+    18.0
+} else {
+    16.0
+};
 
 /// Width of a row of `count` Linux caption buttons, drawn at the cluster's
 /// own 24px-button / 2px-gap rhythm.
@@ -446,6 +456,10 @@ pub fn apply_keymap(
     // key equivalents and must survive keymap re-application.
     crate::app_menus::bind_keys(cx);
     cx.bind_keys([
+        KeyBinding::new("ctrl-l", FocusPrompt, None),
+        KeyBinding::new(&platform_combo("mod-="), IncreaseUiFontSize, None),
+        KeyBinding::new(&platform_combo("mod-+"), IncreaseUiFontSize, None),
+        KeyBinding::new(&platform_combo("mod--"), DecreaseUiFontSize, None),
         KeyBinding::new(
             &valid_or_default(&keymap.random_wallpaper, "mod-u"),
             RandomWallpaper,
@@ -510,6 +524,15 @@ pub fn apply_keymap(
         // Fixed: ⌘K summons the command palette.
         // Pressing it again dismisses.
         KeyBinding::new(&platform_combo("mod-k"), ToggleCommandPalette, None),
+        KeyBinding::new(&platform_combo("mod-f"), FindInChat, None),
+        KeyBinding::new(
+            &valid_or_default(
+                &keymap.switch_project,
+                ShortcutId::SwitchProject.default_combo(),
+            ),
+            SwitchProject,
+            None,
+        ),
         KeyBinding::new(
             &valid_or_default(&keymap.open_model_picker, "mod-/"),
             OpenModelPicker,
@@ -541,6 +564,7 @@ pub enum SettingsSection {
     /// Which harnesses the composer offers (enable/disable toggles) —
     /// labeled "Providers".
     Harnesses,
+    Usage,
     /// Per-provider CLI accounts (login, usage) — labeled "Accounts".
     Agents,
     Appearance,
@@ -557,13 +581,14 @@ pub enum SettingsSection {
 
 impl SettingsSection {
     /// Sections shown in Settings. `Agents` is a legacy Accounts route alias.
-    pub const ALL: [SettingsSection; 10] = [
+    pub const ALL: [SettingsSection; 11] = [
         SettingsSection::General,
         SettingsSection::Appearance,
         SettingsSection::Notifications,
         SettingsSection::Voice,
         SettingsSection::Shortcuts,
         SettingsSection::Harnesses,
+        SettingsSection::Usage,
         SettingsSection::Devices,
         SettingsSection::Files,
         SettingsSection::Appshots,
@@ -599,6 +624,7 @@ impl SettingsSection {
     /// Stable name shared by `ui-settings.json` and `ZERON_OPEN_ROUTE`.
     fn slug(self) -> &'static str {
         match self {
+            SettingsSection::Usage => "usage",
             SettingsSection::Devices => "devices",
             SettingsSection::Harnesses => "providers",
             SettingsSection::Agents => "agents",
@@ -617,6 +643,7 @@ impl SettingsSection {
     fn from_slug(slug: &str) -> Option<Self> {
         Some(match slug {
             "devices" => SettingsSection::Devices,
+            "usage" => SettingsSection::Usage,
             "providers" | "harnesses" => SettingsSection::Harnesses,
             "agents" => SettingsSection::Agents,
             "appearance" => SettingsSection::Appearance,
@@ -643,6 +670,7 @@ impl SettingsSection {
         match self {
             SettingsSection::Devices => "Devices",
             SettingsSection::Harnesses => "Providers",
+            SettingsSection::Usage => "Usage",
             SettingsSection::Agents => "Accounts",
             SettingsSection::Appearance => "Appearance",
             SettingsSection::Files => "Files",
@@ -971,24 +999,25 @@ pub(super) fn chat_row_height(shows_branch: bool, shows_pull_request: bool) -> f
         metadata_height = metadata_height.max(16.0);
     }
     if metadata_height == 0.0 {
-        45.0
+        33.0 + 2.0 * SIDEBAR_ROW_PAD_Y
     } else {
-        47.0 + metadata_height
+        35.0 + 2.0 * SIDEBAR_ROW_PAD_Y + metadata_height
     }
 }
 fn sidebar_row_height(compact: bool, show_label: bool, branch: bool, pr: bool) -> f32 {
     if compact {
-        29.0
+        17.0 + 2.0 * SIDEBAR_ROW_PAD_Y + if branch { 16.0 } else { 0.0 }
     } else {
         chat_row_height(branch, pr) - if show_label { 0.0 } else { 16.0 }
     }
 }
 
+const SIDEBAR_ROW_PAD_Y: f32 = 12.0;
 /// Flex gap between sidebar list items.
-const SIDEBAR_LIST_GAP: f32 = 2.0;
+const SIDEBAR_LIST_GAP: f32 = 6.0;
 /// Fixed vertical slot occupied by one active sidebar card.
 #[cfg(test)]
-const SIDEBAR_SESSION_SLOT: f32 = 61.0 + SIDEBAR_LIST_GAP;
+const SIDEBAR_SESSION_SLOT: f32 = 49.0 + 2.0 * SIDEBAR_ROW_PAD_Y + SIDEBAR_LIST_GAP;
 const SIDEBAR_DRAG_SCROLL_BAND: f32 = 48.0;
 const SIDEBAR_DRAG_SCROLL_MAX: f32 = 12.0;
 const SIDEBAR_DRAG_SCROLL_FRAME_MS: u64 = 16;
@@ -1066,9 +1095,6 @@ pub(crate) fn chat_title_editor(
 /// Ramp height of the sidebar's scroll-edge fade (the gpui
 /// [`gpui::EdgeFade`] scope — per-primitive, so text fades per glyph).
 const SIDEBAR_GLASS_FADE_BAND: f32 = 24.0;
-
-/// Target of the sidebar's "Star on GitHub" banner (same as the landing page).
-const GITHUB_REPO_URL: &str = "https://github.com/zeronsh/comet";
 
 /// New-thread controls float over the tail of a top-anchored image hero. The
 /// hero reaches below the composer, giving its lower mask room to dissolve
@@ -1884,22 +1910,11 @@ impl Render for SidebarPane {
     }
 }
 
-/// A button in the "Check for Updates…" dialog.
-#[derive(Debug, Clone, Copy)]
-enum UpdatePromptButton {
-    Close(&'static str),
-    CheckAgain,
-    Download,
-    Restart,
-    OpenDownloads,
-}
-
 #[derive(Debug, Clone)]
 enum PendingExit {
     CloseWindow,
     Quit,
     RuntimeChange,
-    InstallUpdate(PathBuf),
 }
 
 pub struct Shell {
@@ -1907,6 +1922,7 @@ pub struct Shell {
     sidebar_pane: Entity<SidebarPane>,
     transcript: Entity<Transcript>,
     composer: Entity<Composer>,
+    mascot: Entity<crate::mascot::Mascot>,
     /// The window's voice orchestrator: independent of the selected chat.
     voice: Entity<crate::voice::VoiceController>,
     /// Sidebar footer orb (session live) and the full-window stage's orb.
@@ -2028,7 +2044,10 @@ pub struct Shell {
     notifications_page: Option<Entity<NotificationsPage>>,
     shortcuts_page: Option<Entity<ShortcutsPage>>,
     accounts_page: Option<Entity<AccountsPage>>,
+    sidebar_usage: Entity<crate::sidebar_usage::SidebarUsage>,
     harnesses_page: Option<Entity<HarnessesPage>>,
+    usage_page: Option<Entity<crate::usage_panel::UsagePanel>>,
+    usage_dialog: Option<Entity<crate::usage_panel::UsagePanel>>,
     shortcuts_sub: Option<Subscription>,
     notifications_sub: Option<Subscription>,
     files_settings_sub: Option<Subscription>,
@@ -2116,10 +2135,6 @@ pub struct Shell {
     user_menu: popover::Popup<()>,
     /// Inline sidebar error strip (mutation failures); click dismisses.
     sidebar_notice: Option<SharedString>,
-    /// Repaints the update strip and dialog as the app-level update
-    /// lifecycle ([`crate::app_update`]) moves. `None` when the app runs
-    /// without a desktop checker (tests).
-    _app_update_observation: Option<Subscription>,
     org: Option<OrgGateUi>,
     sync_flow: SyncFlow,
     mutate_task: Option<Task<()>>,
@@ -2261,6 +2276,8 @@ impl Shell {
         let transcript = cx.new(|cx| Transcript::new(state.clone(), cx));
         transcript.update(cx, |transcript, _| transcript.retain_for_route_exit());
         let composer = cx.new(|cx| Composer::new(state.clone(), cx));
+        let mascot = cx.new(|cx| crate::mascot::Mascot::new(composer.read(cx).surface_bounds()));
+        let sidebar_usage = cx.new(|cx| crate::sidebar_usage::SidebarUsage::new(state.clone(), cx));
         let voice = cx.new(|_| crate::voice::VoiceController::default());
         let voice_footer_orb = cx.new(|_| {
             crate::orb::Orb::new()
@@ -2411,6 +2428,7 @@ impl Shell {
             sidebar_pane,
             transcript,
             composer,
+            mascot,
             voice,
             voice_footer_orb,
             voice_stage_orb,
@@ -2484,7 +2502,10 @@ impl Shell {
             notifications_page: None,
             shortcuts_page: None,
             accounts_page: None,
+            sidebar_usage,
             harnesses_page: None,
+            usage_page: None,
+            usage_dialog: None,
             shortcuts_sub: None,
             notifications_sub: None,
             files_settings_sub: None,
@@ -2536,8 +2557,6 @@ impl Shell {
             harness_update_scroll: settings::widgets::PageScroll::default(),
             user_menu: popover::Popup::default(),
             sidebar_notice: None,
-            _app_update_observation: crate::app_update::AppUpdate::global(cx)
-                .map(|update| cx.observe(&update, |_, _, cx| cx.notify())),
             org: None,
             sync_flow: SyncFlow::Idle,
             mutate_task: None,
@@ -4960,6 +4979,22 @@ impl Shell {
                     None => Empty.into_any_element(),
                 }
             }
+            SettingsSection::Usage => {
+                if self.usage_page.is_none() {
+                    let state = self.state.clone();
+                    self.usage_page = Some(cx.new(|cx| {
+                        crate::usage_panel::UsagePanel::new(
+                            state,
+                            crate::usage_panel::UsagePanelKind::Page,
+                            cx,
+                        )
+                    }));
+                }
+                match &self.usage_page {
+                    Some(page) => page.clone().into_any_element(),
+                    None => Empty.into_any_element(),
+                }
+            }
             SettingsSection::Agents => {
                 if self.accounts_page.is_none() {
                     let state = self.state.clone();
@@ -6631,7 +6666,7 @@ impl Shell {
                         self.reduced_motion,
                     ),
                     false,
-                    16.0,
+                    TITLEBAR_ICON_SIZE,
                     theme.text_muted,
                 ),
                 ShortcutId::ToggleSidebar.label(),
@@ -7173,6 +7208,7 @@ impl Shell {
         let section_icon = |item: SettingsSection| match item {
             SettingsSection::Devices => icons::MONITOR,
             SettingsSection::Harnesses => icons::WIDGET,
+            SettingsSection::Usage => icons::CLOCK_CIRCLE,
             SettingsSection::Agents => icons::KEY_MINIMALISTIC,
             SettingsSection::Appearance => icons::TUNING,
             SettingsSection::Files => icons::FOLDER,
@@ -7385,7 +7421,7 @@ impl Shell {
                 zeron_proto::ChatIndicator::Idle => None,
             }
         };
-        let shows_metadata = branch.is_some() || change_request.is_some();
+        let shows_metadata = branch.is_some() || (!compact && change_request.is_some());
         let queued = queued && !undelivered;
         let working = status == zeron_proto::ChatIndicator::Working && !queued && !undelivered;
         // Subagents running under this chat show as a "● N" pill beside the
@@ -7692,8 +7728,8 @@ impl Shell {
             } else {
                 8.0
             }))
-            .px(px(Theme::SPACE_SM))
-            .py(px(6.0))
+            .px(px(Theme::SPACE_MD))
+            .py(px(SIDEBAR_ROW_PAD_Y))
             .text_color(motion::hover_blend(&fade_key, rest_text, text))
             .bg(motion::hover_blend(&fade_key, rest_bg, hover_bg))
             // No selection ring (user request) — the wash alone marks the
@@ -8003,7 +8039,7 @@ impl Shell {
             )
             // Line 3 is structural, not reserved whitespace: compact states
             // omit it completely when both Branch and Pull request are hidden.
-            .when(!compact && shows_metadata, |row| {
+            .when(shows_metadata, |row| {
                 row.child(
                     div()
                         .w_full()
@@ -8011,6 +8047,7 @@ impl Shell {
                         .flex_row()
                         .items_center()
                         .gap(px(4.0))
+                        .when(compact, |el| el.pl(px(17.0)))
                         .when_some(branch, |el, branch| {
                             el.child(
                                 icon(icons::GIT_BRANCH)
@@ -8031,7 +8068,7 @@ impl Shell {
                         // Stable invisible spring keeps the optional PR badge
                         // pinned right without changing no-PR paint.
                         .child(div().flex_1().min_w_0())
-                        .when_some(change_request, |el, summary| {
+                        .when_some(change_request.filter(|_| !compact), |el, summary| {
                             el.child(if preview {
                                 crate::change_requests::pull_request_badge_preview(
                                     format!("{row_id}-pr").into(),
@@ -8387,14 +8424,14 @@ impl Shell {
                             .sidebar_pinned_heights
                             .get(from)
                             .copied()
-                            .unwrap_or(61.0)
+                            .unwrap_or_else(|| chat_row_height(true, false))
                             + SIDEBAR_LIST_GAP);
                     let target = crate::terminal::panel::slide_offset(ix, from, over)
                         * (self
                             .sidebar_pinned_heights
                             .get(from)
                             .copied()
-                            .unwrap_or(61.0)
+                            .unwrap_or_else(|| chat_row_height(true, false))
                             + SIDEBAR_LIST_GAP);
                     if self.reduced_motion {
                         return div()
@@ -8603,11 +8640,6 @@ impl Shell {
         )
         .fade_overflow_y(&self.sidebar_scroll);
 
-        let update_strip = self.render_update_strip(theme, cx);
-        // Stacked above the update strip, the banner needs its own gap; alone
-        // it leans on the user-menu block's padding like the strip does.
-        let github_star_banner = self.render_github_star_banner(update_strip.is_some(), theme, cx);
-
         div()
             .w(px(self.settings.sidebar_width))
             .h_full()
@@ -8623,10 +8655,6 @@ impl Shell {
             .when_some(self.render_connection_pill(theme, cx), |el, pill| {
                 el.child(pill)
             })
-            // "Star on GitHub" banner until dismissed (persisted), then the
-            // update strip — both above the user menu, below the lists.
-            .when_some(github_star_banner, |el, banner| el.child(banner))
-            .when_some(update_strip, |el, strip| el.child(strip))
             // Inline mutation-failure notice.
             .when_some(self.sidebar_notice.clone(), |el, notice| {
                 el.child(
@@ -8651,350 +8679,29 @@ impl Shell {
             })
             .child(
                 div()
+                    .id("sidebar-usage")
+                    .flex_none()
+                    .px(px(Theme::SPACE_SM))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        let state = this.state.clone();
+                        this.usage_dialog = Some(cx.new(|cx| {
+                            crate::usage_panel::UsagePanel::new(
+                                state,
+                                crate::usage_panel::UsagePanelKind::Dialog,
+                                cx,
+                            )
+                        }));
+                        cx.notify();
+                    }))
+                    .child(self.sidebar_usage.clone()),
+            )
+            .child(
+                div()
                     .p(px(Theme::SPACE_SM))
                     .flex_none()
                     .child(self.render_sidebar_footer(theme, cx)),
             )
             .into_any_element()
-    }
-
-    /// "Star on GitHub" banner, styled like the update strip. Clicking it
-    /// opens the repository; either that or the close button dismisses it for
-    /// good — the choice is persisted so it never returns on the next launch.
-    fn render_github_star_banner(
-        &self,
-        above_update_strip: bool,
-        theme: &Theme,
-        cx: &mut Context<Self>,
-    ) -> Option<AnyElement> {
-        if self.settings.github_star_banner_dismissed {
-            return None;
-        }
-        let tone = theme.accent;
-        let chip_bg_hover = theme.accent.opacity(0.16);
-        let close_bg_hover = theme.accent.opacity(0.22);
-        Some(
-            div()
-                .id("github-star-banner")
-                .mx(px(Theme::SPACE_SM))
-                .when(above_update_strip, |el| el.mb(px(Theme::SPACE_XS)))
-                .pl(px(Theme::SPACE_SM))
-                .pr(px(Theme::SPACE_XS))
-                .py(px(4.0))
-                .rounded(px(Theme::CONTROL_RADIUS))
-                .bg(theme.accent_wash)
-                .flex()
-                .flex_row()
-                .items_center()
-                .gap(px(6.0))
-                .text_size(crate::typography::ui_rems(11.0))
-                .font_weight(gpui::FontWeight::MEDIUM)
-                .text_color(tone)
-                .cursor_pointer()
-                .hover(move |s| s.bg(chip_bg_hover))
-                .on_click(cx.listener(|this, _, _, cx| {
-                    cx.open_url(GITHUB_REPO_URL);
-                    this.dismiss_github_star_banner(cx);
-                }))
-                // Glyphs sit below the line box's optical center: nudge the
-                // star half a pixel down so it centers on the cap height.
-                .child(
-                    icon(icons::STAR_BOLD)
-                        .flex_none()
-                        .relative()
-                        .top(px(0.5))
-                        .size(px(12.0))
-                        .text_color(tone),
-                )
-                .child(div().flex_1().min_w_0().truncate().child("Star on GitHub"))
-                .child(
-                    div()
-                        .id("github-star-banner-dismiss")
-                        .flex_none()
-                        .size(px(18.0))
-                        .rounded(px(4.0))
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .cursor_pointer()
-                        .hover(move |s| s.bg(close_bg_hover))
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            cx.stop_propagation();
-                            this.dismiss_github_star_banner(cx);
-                        }))
-                        .tooltip(crate::settings::widgets::text_tooltip("Dismiss"))
-                        .child(icon(icons::CLOSE).size(px(10.0)).text_color(tone)),
-                )
-                .into_any_element(),
-        )
-    }
-
-    fn dismiss_github_star_banner(&mut self, cx: &mut Context<Self>) {
-        self.settings.github_star_banner_dismissed = true;
-        self.schedule_save(cx);
-        cx.notify();
-    }
-
-    /// Update strip: shown above the user menu whenever this app's release
-    /// checker ([`crate::app_update`]) has found a newer version. Self-updating
-    /// installs (macOS bundles, Windows installs, Linux managed installs) show
-    /// the background download and then "restart to apply"; installs that
-    /// can't replace themselves explain why; advisory installs point at
-    /// `zeron update` or the GitHub releases page and dismiss per version.
-    fn render_update_strip(&mut self, theme: &Theme, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let update = crate::app_update::AppUpdate::global(cx)?;
-        let (label, action) = update.read(cx).strip()?;
-        let failed = matches!(
-            update.read(cx).flow(),
-            crate::app_update::Flow::Failed { .. }
-        );
-        let tone = if failed { theme.danger } else { theme.accent };
-        // Follow the selected spectrum with a low-emphasis glass tint rather
-        // than painting the bright text accent as a solid slab.
-        let (chip_bg, chip_bg_hover) = if failed {
-            (theme.danger.opacity(0.14), theme.danger.opacity(0.22))
-        } else {
-            (theme.accent_wash, theme.accent.opacity(0.16))
-        };
-
-        let mut strip = div()
-            .id("update-strip")
-            .mx(px(Theme::SPACE_SM))
-            // No bottom margin: the user-menu block below carries its own
-            // SPACE_SM padding — doubling it read as a hole (user report).
-            .px(px(Theme::SPACE_SM))
-            .py(px(6.0))
-            .rounded(px(Theme::CONTROL_RADIUS))
-            .bg(chip_bg)
-            .flex()
-            .flex_row()
-            .items_center()
-            .text_size(crate::typography::ui_rems(11.0))
-            .font_weight(gpui::FontWeight::MEDIUM)
-            .text_color(tone)
-            .child(div().flex_1().min_w_0().child(label));
-        if action != crate::app_update::StripAction::None {
-            strip = strip
-                .cursor_pointer()
-                .hover(move |s| s.bg(chip_bg_hover))
-                .on_click(
-                    cx.listener(move |this, _, _, cx| this.on_update_strip_click(action, cx)),
-                );
-        }
-        Some(strip.into_any_element())
-    }
-
-    /// Download → the background stage; Restart → swap + relaunch; Explain →
-    /// the update dialog; advisory installs open their destination (if any),
-    /// then dismiss for this version.
-    fn on_update_strip_click(
-        &mut self,
-        action: crate::app_update::StripAction,
-        cx: &mut Context<Self>,
-    ) {
-        use crate::app_update::{AppUpdate, StripAction};
-        let Some(update) = AppUpdate::global(cx) else {
-            return;
-        };
-        match action {
-            StripAction::None => {}
-            StripAction::Download => update.update(cx, |update, cx| update.start_download(cx)),
-            StripAction::Restart => {
-                if let Some(staged) = update.read(cx).staged() {
-                    self.apply_staged_update(staged, cx);
-                }
-            }
-            StripAction::Explain => update.update(cx, |update, cx| update.show_result(cx)),
-            StripAction::Advise { open_releases } => {
-                if open_releases {
-                    cx.open_url(zeron_update::RELEASES_PAGE);
-                }
-                update.update(cx, |update, cx| update.dismiss_advisory(cx));
-            }
-        }
-    }
-
-    /// Swap the staged update over the installed one, arm the detached
-    /// relauncher, and quit — the relauncher starts the new version once this
-    /// process (and its engine lock / IPC port) is gone.
-    fn apply_staged_update(&mut self, staged: PathBuf, cx: &mut Context<Self>) {
-        if !self.prepare_exit(PendingExit::InstallUpdate(staged.clone()), cx) {
-            return;
-        }
-        let Some(update) = crate::app_update::AppUpdate::global(cx) else {
-            return;
-        };
-        if update
-            .update(cx, |update, cx| update.install_for_restart(&staged, cx))
-            .is_ok()
-        {
-            crate::app_menus::quit_after_save(cx);
-        }
-    }
-
-    /// The "Check for Updates…" dialog: checking, then the outcome, which
-    /// stays live (download progress, ready to restart) while it is open.
-    fn render_update_prompt(
-        &mut self,
-        viewport: gpui::Size<Pixels>,
-        cx: &mut Context<Self>,
-    ) -> Option<AnyElement> {
-        use crate::app_update::{AppUpdate, Flow, Prompt};
-        let update = AppUpdate::global(cx)?;
-        let theme = Theme::of(cx).for_popup();
-        let current = zeron_update::current_version();
-        let (title, body, buttons): (SharedString, SharedString, Vec<UpdatePromptButton>) = {
-            let update = update.read(cx);
-            match update.prompt()? {
-                Prompt::Checking => (
-                    "Checking for updates…".into(),
-                    format!("You're on Zeron {current}.").into(),
-                    vec![UpdatePromptButton::Close("Cancel")],
-                ),
-                Prompt::CheckFailed(message) => (
-                    "Couldn't check for updates".into(),
-                    message.clone(),
-                    vec![
-                        UpdatePromptButton::Close("Close"),
-                        UpdatePromptButton::CheckAgain,
-                    ],
-                ),
-                Prompt::Result => match update.available() {
-                    None => (
-                        "Zeron is up to date".into(),
-                        format!("Version {current} is the newest release.").into(),
-                        vec![UpdatePromptButton::Close("OK")],
-                    ),
-                    Some(latest) => {
-                        let title: SharedString = format!("Zeron {latest} is available").into();
-                        if let Some(blocker) = update.blocker() {
-                            (
-                                title,
-                                blocker.to_string().into(),
-                                vec![
-                                    UpdatePromptButton::Close("Later"),
-                                    UpdatePromptButton::OpenDownloads,
-                                ],
-                            )
-                        } else if update.install().supports_desktop_update() {
-                            match update.flow() {
-                                Flow::Idle => (
-                                    title,
-                                    format!("You're on {current}.").into(),
-                                    vec![
-                                        UpdatePromptButton::Close("Later"),
-                                        UpdatePromptButton::Download,
-                                    ],
-                                ),
-                                Flow::Downloading { .. } | Flow::Installed => (
-                                    title,
-                                    "Downloading the update in the background — you can keep working."
-                                        .into(),
-                                    vec![UpdatePromptButton::Close("Hide")],
-                                ),
-                                Flow::Ready { version, .. } => (
-                                    format!("Zeron {version} is ready").into(),
-                                    "Restart to finish updating. If you don't, it installs the next time you quit Zeron."
-                                        .into(),
-                                    vec![
-                                        UpdatePromptButton::Close("Later"),
-                                        UpdatePromptButton::Restart,
-                                    ],
-                                ),
-                                Flow::Failed { message, .. } => (
-                                    title,
-                                    format!("The download failed: {message}").into(),
-                                    vec![
-                                        UpdatePromptButton::Close("Later"),
-                                        UpdatePromptButton::Download,
-                                    ],
-                                ),
-                            }
-                        } else if matches!(
-                            update.install(),
-                            zeron_update::InstallKind::Managed { .. }
-                        ) {
-                            (
-                                title,
-                                "Run `zeron update` in a terminal to install it.".into(),
-                                vec![UpdatePromptButton::Close("OK")],
-                            )
-                        } else {
-                            (
-                                title,
-                                "This copy of Zeron wasn't set up by an installer (for example, a source build), so it can't update itself."
-                                    .into(),
-                                vec![
-                                    UpdatePromptButton::Close("Later"),
-                                    UpdatePromptButton::OpenDownloads,
-                                ],
-                            )
-                        }
-                    }
-                },
-            }
-        };
-        let mut row = div()
-            .mt(px(16.0))
-            .flex()
-            .flex_row()
-            .justify_end()
-            .gap(px(8.0));
-        for button in buttons {
-            row = row.child(match button {
-                UpdatePromptButton::Close(label) => {
-                    popover::btn_ghost(&theme, label, "update-prompt-close")
-                        .id("update-prompt-close")
-                        .on_click(cx.listener(|_, _, _, cx| {
-                            if let Some(update) = crate::app_update::AppUpdate::global(cx) {
-                                update.update(cx, |update, cx| update.dismiss_prompt(cx));
-                            }
-                        }))
-                }
-                UpdatePromptButton::CheckAgain => popover::btn_primary(&theme, "Try again")
-                    .id("update-prompt-check")
-                    .on_click(cx.listener(|_, _, _, cx| {
-                        if let Some(update) = crate::app_update::AppUpdate::global(cx) {
-                            update.update(cx, |update, cx| update.check_for_updates(cx));
-                        }
-                    })),
-                UpdatePromptButton::Download => popover::btn_primary(&theme, "Download")
-                    .id("update-prompt-download")
-                    .on_click(cx.listener(|_, _, _, cx| {
-                        if let Some(update) = crate::app_update::AppUpdate::global(cx) {
-                            update.update(cx, |update, cx| update.start_download(cx));
-                        }
-                    })),
-                UpdatePromptButton::Restart => popover::btn_primary(&theme, "Restart to update")
-                    .id("update-prompt-restart")
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        let Some(update) = crate::app_update::AppUpdate::global(cx) else {
-                            return;
-                        };
-                        let staged = update.read(cx).staged();
-                        update.update(cx, |update, cx| update.dismiss_prompt(cx));
-                        if let Some(staged) = staged {
-                            this.apply_staged_update(staged, cx);
-                        }
-                    })),
-                UpdatePromptButton::OpenDownloads => {
-                    popover::btn_primary(&theme, "Open download page")
-                        .id("update-prompt-downloads")
-                        .on_click(cx.listener(|_, _, _, cx| {
-                            cx.open_url(zeron_update::LATEST_RELEASE_PAGE);
-                            if let Some(update) = crate::app_update::AppUpdate::global(cx) {
-                                update.update(cx, |update, cx| update.dismiss_prompt(cx));
-                            }
-                        }))
-                }
-            });
-        }
-        let card = popover::dialog_card(&theme)
-            .child(popover::dialog_title(&theme, &title))
-            .child(div().mt(px(6.0)).child(popover::dialog_body(&theme, body)))
-            .child(row)
-            .into_any_element();
-        Some(popover::modal("update-prompt-dialog", viewport, card))
     }
 
     /// The sidebar's bottom row: account menu on the left, settings toggle on
@@ -9175,24 +8882,6 @@ impl Shell {
                         }
                     };
                     menu.child(row)
-                })
-                // macOS keeps "Check for Updates…" in the app menu under
-                // About; elsewhere there is no app menu, so it lives here.
-                .when(!cfg!(target_os = "macos"), |menu| {
-                    menu.child(
-                        popover::menu_row(theme, false, "user-menu-check-updates")
-                            .id("user-menu-check-updates")
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.close_user_menu(cx);
-                                crate::app_update::check_for_updates(cx);
-                            }))
-                            .child(
-                                icon(icons::REFRESH)
-                                    .size(px(16.0))
-                                    .text_color(theme.text_muted),
-                            )
-                            .child(SharedString::from("Check for updates")),
-                    )
                 })
                 .into_any_element();
             // Opens upward, left-aligned with the pill: the card is as wide as
@@ -9703,10 +9392,9 @@ impl Shell {
             cx.notify();
             return true;
         }
-        if let Some(update) = crate::app_update::AppUpdate::global(cx)
-            && update.read(cx).prompt().is_some()
-        {
-            update.update(cx, |update, cx| update.dismiss_prompt(cx));
+        if self.usage_dialog.is_some() {
+            self.usage_dialog = None;
+            cx.notify();
             return true;
         }
         // The folded-breadcrumbs menu floats over the palette; it closes first.
@@ -10092,6 +9780,20 @@ impl Shell {
             ));
         }
 
+        if let Some(panel) = self.usage_dialog.clone() {
+            let card = popover::dialog_card(&Theme::of(cx).for_popup())
+                .id("usage-dialog-card")
+                .w(px(560.0))
+                .max_h(viewport.height * 0.8)
+                .overflow_y_scroll()
+                .on_mouse_down_out(cx.listener(|this, _, _, cx| {
+                    this.usage_dialog = None;
+                    cx.notify();
+                }))
+                .child(panel)
+                .into_any_element();
+            overlays.push(popover::modal("usage-dialog", viewport, card));
+        }
         overlays.extend(self.render_space_overlays(viewport, window, cx));
         overlays.extend(self.render_section_overlays(viewport, window, cx));
         if let Some(overlay) = self.render_command_palette(viewport, window, cx) {
@@ -10213,9 +9915,6 @@ impl Shell {
 
         if let Some(sync) = self.render_sync_overlay(viewport, cx) {
             overlays.push(sync);
-        }
-        if let Some(update) = self.render_update_prompt(viewport, cx) {
-            overlays.push(update);
         }
 
         overlays
@@ -10410,7 +10109,10 @@ impl Shell {
                 * new_thread_background_backdrop_opacity(dock_frame.dissolve());
             div()
                 .absolute()
-                .inset_0()
+                .top(px(Theme::TITLEBAR_HEIGHT))
+                .left_0()
+                .right_0()
+                .bottom_0()
                 .child(new_thread_background(
                     artwork_frame.previous,
                     artwork_frame.previous_adjustment,
@@ -10545,9 +10247,8 @@ impl Shell {
             .h_full()
             .flex()
             .flex_col()
-            // The hero is deliberately outside the transcript EdgeFade below:
-            // it must paint under the overlaid titlebar instead of becoming
-            // fully transparent across the titlebar's inset band.
+            // The hero is deliberately outside the transcript EdgeFade below
+            // and starts beneath the overlaid titlebar's band.
             .child(new_thread_background_layer)
             .child(
                 // Full-height underlay: the transcript viewport spans the
@@ -12379,7 +12080,9 @@ fn window_control_button(
     theme: &Theme,
     on_click: impl Fn(&gpui::ClickEvent, &mut Window, &mut App) + 'static,
 ) -> impl IntoElement {
-    let glyph = icon(icon_path).size(px(16.0)).text_color(theme.text_muted);
+    let glyph = icon(icon_path)
+        .size(px(TITLEBAR_ICON_SIZE))
+        .text_color(theme.text_muted);
     window_control_button_with(id, glyph, label, theme, on_click)
 }
 
@@ -12529,7 +12232,7 @@ fn linux_caption_button(
         })
         .child(
             icon(icon_path)
-                .size(px(16.0))
+                .size(px(TITLEBAR_ICON_SIZE))
                 .text_color(muted)
                 .group_hover("linux-caption-button", move |style| {
                     style.text_color(hover_fg)
@@ -12578,7 +12281,9 @@ fn header_icon_button(
     theme: &Theme,
     on_click: impl Fn(&gpui::ClickEvent, &mut Window, &mut App) + 'static,
 ) -> gpui::Stateful<gpui::Div> {
-    let glyph = icon(icon_path).size(px(16.0)).text_color(theme.text_muted);
+    let glyph = icon(icon_path)
+        .size(px(TITLEBAR_ICON_SIZE))
+        .text_color(theme.text_muted);
     header_icon_button_with(id, glyph, label, on_click)
 }
 
@@ -12618,6 +12323,26 @@ fn header_icon_button_with(
         })
         .tooltip(crate::settings::widgets::text_tooltip(label))
         .child(glyph)
+}
+
+impl Shell {
+    fn synced_mascot(
+        &mut self,
+        perchable: bool,
+        cx: &mut Context<Self>,
+    ) -> Entity<crate::mascot::Mascot> {
+        let state = self.state.read(cx);
+        let chat = state.selected_chat.clone();
+        let indicator = chat
+            .as_deref()
+            .map_or(zeron_proto::view::Indicator::None, |id| {
+                state.indicator_for(id, Utc::now())
+            });
+        self.mascot.update(cx, |mascot, _| {
+            mascot.sync(perchable, chat.as_deref(), indicator)
+        });
+        self.mascot.clone()
+    }
 }
 
 impl Render for Shell {
@@ -12691,9 +12416,6 @@ impl Render for Shell {
                                 }
                             }
                             PendingExit::RuntimeChange => shell.quit_for_runtime_change(cx),
-                            PendingExit::InstallUpdate(staged) => {
-                                shell.apply_staged_update(staged, cx)
-                            }
                             PendingExit::Quit => unreachable!(),
                         })
                         .ok();
@@ -12819,13 +12541,6 @@ impl Render for Shell {
                 window,
                 |this: &mut Shell, window, cx| {
                     motion::window_activation_changed(window.is_window_active(), cx);
-                    if window.is_window_active()
-                        && let Some(update) = crate::app_update::AppUpdate::global(cx)
-                    {
-                        // Coming back to the app (often after sleep) checks
-                        // at once when a check is due by the wall clock.
-                        update.read(cx).poke();
-                    }
                     if window.is_window_active() && !this.voice.read(cx).offered() {
                         this.check_voice_codex(true, cx);
                     }
@@ -12942,6 +12657,12 @@ impl Render for Shell {
                     }
                 }
             }))
+            .on_action(cx.listener(|_, _: &IncreaseUiFontSize, window, cx| {
+                crate::typography::step_font_size(1, window, cx);
+            }))
+            .on_action(cx.listener(|_, _: &DecreaseUiFontSize, window, cx| {
+                crate::typography::step_font_size(-1, window, cx);
+            }))
             .on_action(cx.listener(|this, _: &ToggleSidebar, _, cx| {
                 if !matches!(this.route, Route::Settings(_)) {
                     this.toggle_sidebar(cx)
@@ -12953,6 +12674,7 @@ impl Render for Shell {
             // New session works from anywhere — `open_new_session` routes back
             // to chat itself, so Settings is not a dead spot.
             .on_action(cx.listener(|this, _: &NewSession, _, cx| this.open_new_session(None, cx)))
+            .on_action(cx.listener(Self::focus_prompt))
             // Native Settings menu item and the platform convention (Cmd+, on
             // macOS, Ctrl+, elsewhere) toggle the modal from any section.
             .on_action(cx.listener(|this, _: &OpenSettings, _, cx| this.toggle_settings(cx)))
@@ -13007,8 +12729,17 @@ impl Render for Shell {
             .on_modifiers_changed(
                 cx.listener(|this, event, _, cx| this.on_modifiers_changed(event, cx)),
             )
+            .on_action(cx.listener(|this, _: &SwitchProject, window, cx| {
+                this.toggle_project_palette(window, cx);
+            }))
             .on_action(cx.listener(|this, _: &ToggleCommandPalette, window, cx| {
                 this.toggle_command_palette(window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &FindInChat, window, cx| {
+                if matches!(this.route, Route::Chat) && !this.overlay_owns_keyboard(cx) {
+                    this.transcript
+                        .update(cx, |transcript, cx| transcript.open_find(window, cx));
+                }
             }))
             .on_action(cx.listener(|this, _: &OpenModelPicker, window, cx| {
                 if matches!(this.route, Route::Chat) && !this.overlay_owns_keyboard(cx) {
@@ -13084,6 +12815,7 @@ impl Render for Shell {
                     // A call started from Settings opens its stage here too.
                     let voice_stage = self.render_voice_stage(window, cx);
                     let overlays = self.render_overlays(window.viewport_size(), window, cx);
+                    let mascot = self.synced_mascot(false, cx);
                     let border_color = Theme::of(cx).border;
                     let sidebar_tone =
                         Self::sidebar_tone(self.settings.sidebar_width, border_color, window);
@@ -13103,6 +12835,7 @@ impl Render for Shell {
                         .child(settings_page)
                         .children(voice_stage)
                         .child(drag)
+                        .child(mascot)
                         .children(overlays);
                     break 'ready root
                         .child(sidebar_tone)
@@ -13202,6 +12935,7 @@ impl Render for Shell {
                 };
                 let files_panel = self.render_files_panel(window, cx);
                 let overlays = self.render_overlays(window.viewport_size(), window, cx);
+                let mascot = self.synced_mascot(true, cx);
                 // Full-window voice stage: above the page chrome, below dialogs.
                 let voice_stage = self.render_voice_stage(window, cx);
                 let under_stage = self.voice_stage_underlay_opacity(cx);
@@ -13319,6 +13053,7 @@ impl Render for Shell {
                     // the cluster: the sidebar toggle and navigation stay live.
                     .children(voice_stage)
                     .child(self.render_titlebar_cluster(cx))
+                    .child(mascot)
                     .children(overlays);
                 root.child(sidebar_tone)
                     .child(motion::fade_in("phase-app", page))
@@ -14698,10 +14433,10 @@ mod tests {
 
     #[test]
     fn sidebar_chat_height_tracks_visible_metadata() {
-        assert_eq!(chat_row_height(false, false), 45.0);
-        assert_eq!(chat_row_height(true, false), 61.0);
-        assert_eq!(chat_row_height(false, true), 63.0);
-        assert_eq!(chat_row_height(true, true), 63.0);
+        assert_eq!(chat_row_height(false, false), 57.0);
+        assert_eq!(chat_row_height(true, false), 73.0);
+        assert_eq!(chat_row_height(false, true), 75.0);
+        assert_eq!(chat_row_height(true, true), 75.0);
     }
 
     #[test]
@@ -16576,11 +16311,6 @@ mod exit_regressions {
                         Some(PendingExit::RuntimeChange)
                     ));
                     assert!(shell.runtime_change_task.is_none());
-                    shell.apply_staged_update(PathBuf::from("must-not-install"), cx);
-                    assert!(matches!(
-                        shell.pending_exit,
-                        Some(PendingExit::InstallUpdate(_))
-                    ));
                     shell.cancel_file_close(RightSurface::File(0), cx);
                     assert!(shell.pending_exit.is_none());
                 })
@@ -17338,6 +17068,10 @@ mod settings_modal_regressions {
                 "{route}"
             );
         }
+        assert_eq!(
+            settings_open_route("settings/usage", remembered),
+            Some(SettingsSection::Usage)
+        );
         assert_eq!(settings_open_route("settings/billing", remembered), None);
         assert_eq!(settings_open_route("new", remembered), None);
     }

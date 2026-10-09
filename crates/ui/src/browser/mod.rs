@@ -47,7 +47,9 @@ pub(crate) fn bind_keys(cx: &mut App, keymap: &crate::settings::KeymapConfig) {
             }
         };
     }
-    bind!("mod-l", FocusAddress);
+    if cfg!(target_os = "macos") {
+        bind!("mod-l", FocusAddress);
+    }
     bind!("mod-t", NewTab);
     bind!("mod-w", CloseTab);
     bind!("mod-[", Back);
@@ -718,7 +720,7 @@ mod tests {
                     .borrow()
                     .bindings_for_action(&FocusAddress)
                     .count(),
-                1
+                usize::from(cfg!(target_os = "macos"))
             );
             assert_eq!(
                 cx.key_bindings()

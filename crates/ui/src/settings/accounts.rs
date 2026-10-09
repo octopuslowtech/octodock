@@ -34,16 +34,16 @@ use crate::theme::Theme;
 // Pure: usage meters + labels
 // ---------------------------------------------------------------------------
 
-pub const USAGE_WARN_FRACTION: f32 = 0.80;
-pub const USAGE_CRITICAL_FRACTION: f32 = 0.95;
+pub const USAGE_WARN_FRACTION: f32 = 0.60;
+pub const USAGE_CRITICAL_FRACTION: f32 = 0.85;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UsageLevel {
-    /// < 80% — indigo.
+    /// < 60% — green.
     Normal,
-    /// ≥ 80% — amber.
+    /// ≥ 60% — amber.
     Warn,
-    /// ≥ 95% — red.
+    /// ≥ 85% — red.
     Critical,
 }
 
@@ -58,20 +58,11 @@ pub fn usage_level(fraction: f32) -> UsageLevel {
     }
 }
 
-/// Usage meter columns: window label, reset time, and the meters' overall
-/// measure — long enough to read at a glance, short of a full-width gauge.
-/// Compact account list geometry: every row shares one usage column and one
-/// action slot, so meters and buttons line up down the list however many
-/// accounts there are.
-const USAGE_LABEL_WIDTH: f32 = 52.0;
-const USAGE_BAR_WIDTH: f32 = 88.0;
-const USAGE_PERCENT_WIDTH: f32 = 34.0;
-const USAGE_COLUMN_WIDTH: f32 = USAGE_LABEL_WIDTH + USAGE_BAR_WIDTH + USAGE_PERCENT_WIDTH + 16.0;
 const ACCOUNT_ACTION_WIDTH: f32 = 112.0;
 
 pub fn usage_color(level: UsageLevel, theme: &Theme) -> Hsla {
     match level {
-        UsageLevel::Normal => theme.accent,
+        UsageLevel::Normal => theme.success,
         UsageLevel::Warn => theme.warning,
         UsageLevel::Critical => theme.danger,
     }
@@ -342,70 +333,6 @@ pub fn mark_switched(snapshot: &mut AgentAccountsSnapshot, account: &AgentAccoun
             row.active = row.id == account.id;
         }
     }
-}
-
-/// One mini meter line of the usage column: label, a short bar, percent.
-/// The reset moment rides the row's tooltip instead of taking a column.
-pub(crate) fn render_usage_meter(
-    window: &zeron_proto::AgentUsageWindow,
-    theme: &Theme,
-) -> AnyElement {
-    let fraction = window.used_fraction.clamp(0.0, 1.0);
-    let level = usage_level(fraction);
-    let fill = usage_color(level, theme).opacity(match level {
-        UsageLevel::Normal => 0.8,
-        _ => 0.9,
-    });
-    div()
-        .h(px(16.0))
-        .flex()
-        .flex_row()
-        .items_center()
-        .gap(px(8.0))
-        .text_size(crate::typography::ui_rems(11.5))
-        .child(
-            div()
-                .w(px(USAGE_LABEL_WIDTH))
-                .flex_none()
-                .truncate()
-                .text_color(theme.text_muted)
-                .child(SharedString::from(window.label.clone())),
-        )
-        .child(
-            div()
-                .w(px(USAGE_BAR_WIDTH))
-                .flex_none()
-                .h(px(4.0))
-                .rounded_full()
-                .overflow_hidden()
-                .bg(theme.wash(0.08))
-                .when(fraction > 0.0, |el| {
-                    el.child(
-                        div()
-                            .h_full()
-                            // A 1.5% floor keeps tiny non-zero usage
-                            // visible (zeron `max(used, 1.5)%`).
-                            .w(gpui::relative(fraction.max(0.015)))
-                            .rounded_full()
-                            .bg(fill),
-                    )
-                }),
-        )
-        .child(
-            div()
-                .w(px(USAGE_PERCENT_WIDTH))
-                .flex_none()
-                .text_right()
-                .text_color(match level {
-                    UsageLevel::Normal => theme.text_muted,
-                    _ => usage_color(level, theme),
-                })
-                .child(SharedString::from(format!(
-                    "{}%",
-                    (fraction * 100.0).round() as u32
-                ))),
-        )
-        .into_any_element()
 }
 
 // ---------------------------------------------------------------------------
@@ -1087,28 +1014,13 @@ impl AccountsPage {
 
     // ---- render pieces ----
 
-    /// The quiet note an account shows in its meta line instead of meters.
-    /// Render hook for the usage data flow: a reason the probe came back
-    /// empty belongs here. A provider without usage gets no note at all.
-    fn render_usage_missing(&self, account: &AgentAccount, _theme: &Theme) -> Option<AnyElement> {
-        if !reports_usage(account.harness) {
+    fn render_login_note(&self, account: &AgentAccount) -> Option<AnyElement> {
+        if account.switchable || !switches_accounts(account.harness) {
             return None;
         }
-        let note = if !account.switchable && switches_accounts(account.harness) {
-            match account.harness {
-                // Keychain denied: the login is there, its secret isn't.
-                HarnessId::ClaudeCode => "Credentials unavailable".to_string(),
-                // An opaque token whose account couldn't be looked up.
-                _ => "Couldn't identify this login".to_string(),
-            }
-        } else if let Some(reason) = &account.usage_error {
-            // The engine's reason ("Rate limited by Anthropic — retrying in
-            // 2m", "Signed out — sign in again"), not a bare shrug.
-            reason.clone()
-        } else if self.refreshing {
-            "Checking usage…".to_string()
-        } else {
-            "Usage unavailable".to_string()
+        let note = match account.harness {
+            HarnessId::ClaudeCode => "Credentials unavailable",
+            _ => "Couldn't identify this login",
         };
         Some(div().child(SharedString::from(note)).into_any_element())
     }
@@ -1150,7 +1062,7 @@ impl AccountsPage {
         ix: usize,
         first: bool,
         theme: &Theme,
-        now: DateTime<Utc>,
+        _now: DateTime<Utc>,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let email: SharedString = account
@@ -1183,41 +1095,7 @@ impl AccountsPage {
                     .into_any_element(),
             );
         }
-        // Meters XOR the reason they're missing — the reason joins the meta
-        // line, so a failed probe never changes the row's height.
-        let usage: AnyElement = if account.usage_windows.is_empty() {
-            meta.extend(self.render_usage_missing(account, theme));
-            div()
-                .w(px(USAGE_COLUMN_WIDTH))
-                .flex_none()
-                .into_any_element()
-        } else {
-            let resets = account
-                .usage_windows
-                .iter()
-                .map(|window| match format_reset(window.resets_at, now) {
-                    Some(reset) => format!("{}: {reset}", window.label),
-                    None => window.label.clone(),
-                })
-                .collect::<Vec<_>>()
-                .join(" · ");
-            div()
-                .id(("account-usage", ix))
-                .w(px(USAGE_COLUMN_WIDTH))
-                .flex_none()
-                .flex()
-                .flex_col()
-                .gap(px(2.0))
-                .tooltip(widgets::text_tooltip(resets))
-                .children(
-                    account
-                        .usage_windows
-                        .iter()
-                        .take(2)
-                        .map(|window| render_usage_meter(window, theme)),
-                )
-                .into_any_element()
-        };
+        meta.extend(self.render_login_note(account));
 
         // Avatar: the account's initial on a soft disc; the live account gets
         // an accent ring with a hairline of air between ring and disc.
@@ -1380,7 +1258,6 @@ impl AccountsPage {
                         el.child(widgets::meta_line(theme, meta))
                     }),
             )
-            .child(usage)
             .child(
                 div()
                     .w(px(28.0))
@@ -1430,29 +1307,6 @@ impl AccountsPage {
                         .gap(px(6.0))
                         .child(ghost(176.0, 11.0))
                         .child(ghost(48.0, 9.0)),
-                )
-                .child(
-                    div()
-                        .w(px(USAGE_COLUMN_WIDTH))
-                        .flex_none()
-                        .flex()
-                        .flex_col()
-                        .gap(px(8.0))
-                        .children((0..2).map(|_| {
-                            div()
-                                .flex()
-                                .flex_row()
-                                .items_center()
-                                .gap(px(8.0))
-                                .child(ghost(USAGE_LABEL_WIDTH - 12.0, 8.0))
-                                .child(
-                                    div()
-                                        .w(px(USAGE_BAR_WIDTH))
-                                        .h(px(4.0))
-                                        .rounded_full()
-                                        .bg(theme.wash(0.06)),
-                                )
-                        })),
                 )
                 .child(div().w(px(ACCOUNT_ACTION_WIDTH)).flex_none())
         };
@@ -2260,17 +2114,17 @@ mod tests {
     #[test]
     fn usage_thresholds_match_zeron() {
         assert_eq!(usage_level(0.0), UsageLevel::Normal);
-        assert_eq!(usage_level(0.79), UsageLevel::Normal);
-        assert_eq!(usage_level(0.80), UsageLevel::Warn);
-        assert_eq!(usage_level(0.94), UsageLevel::Warn);
-        assert_eq!(usage_level(0.95), UsageLevel::Critical);
+        assert_eq!(usage_level(0.59), UsageLevel::Normal);
+        assert_eq!(usage_level(0.60), UsageLevel::Warn);
+        assert_eq!(usage_level(0.84), UsageLevel::Warn);
+        assert_eq!(usage_level(0.85), UsageLevel::Critical);
         assert_eq!(usage_level(1.0), UsageLevel::Critical);
     }
 
     #[test]
     fn usage_colors_map_to_theme_accents() {
         let theme = Theme::dark();
-        assert_eq!(usage_color(UsageLevel::Normal, &theme), theme.accent);
+        assert_eq!(usage_color(UsageLevel::Normal, &theme), theme.success);
         assert_eq!(usage_color(UsageLevel::Warn, &theme), theme.warning);
         assert_eq!(usage_color(UsageLevel::Critical, &theme), theme.danger);
     }
