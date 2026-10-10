@@ -44,17 +44,17 @@ struct PanelTitlebarWidths {
     files_controls: f32,
 }
 
-/// The session header's "+" and fork buttons (28px each, 2px gap) plus the
+/// The session header's "+" and fork buttons (2px gap) plus the
 /// row gap they cost the project-actions control.
-const SESSION_CONTROLS_WIDTH: f32 = 28.0 * 2.0 + 2.0 + 8.0;
+const SESSION_CONTROLS_WIDTH: f32 = HEADER_BUTTON_SIZE * 2.0 + 2.0 + 8.0;
 
 const OPEN_IN_CONTROL_WIDTH: f32 = 29.0 + 1.0 + 22.0 + 8.0;
 
 /// The two fixed right-edge anchors: the explorer toggle and the pane toggle
-/// (28px each) with the same 4px gap the surface strip keeps between its
+/// with the same 4px gap the surface strip keeps between its
 /// controls, so the two never render as one fused block.
 const PANEL_TOGGLE_GAP: f32 = 4.0;
-const PANEL_TOGGLE_SLOTS: f32 = 28.0 * 2.0 + PANEL_TOGGLE_GAP;
+const PANEL_TOGGLE_SLOTS: f32 = HEADER_BUTTON_SIZE * 2.0 + PANEL_TOGGLE_GAP;
 
 fn panel_titlebar_widths(
     surfaces_visible: f32,

@@ -1,7 +1,5 @@
-# Native GUI regression: close the real window, require a clean process exit,
-# then reopen the same isolated profile. No real account/provider data is used.
 param(
-    [string]$Exe = (Join-Path $PSScriptRoot '../target/release/zeron.exe'),
+    [string]$Exe = (Join-Path $PSScriptRoot '../target/release/octodock.exe'),
     [int]$Runs = 2
 )
 $ErrorActionPreference = 'Stop'
@@ -12,12 +10,12 @@ $root = Join-Path $PSScriptRoot ('../target/windows-lifecycle-' + [guid]::NewGui
 $root = [IO.Path]::GetFullPath($root)
 New-Item -ItemType Directory -Path $root | Out-Null
 
-if (-not ('ZeronWindowProbe' -as [type])) {
+if (-not ('OctodockWindowProbe' -as [type])) {
 Add-Type @'
 using System;
 using System.Text;
 using System.Runtime.InteropServices;
-public static class ZeronWindowProbe {
+public static class OctodockWindowProbe {
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
     public static extern int GetClassName(IntPtr hwnd, StringBuilder name, int count);
     [DllImport("user32.dll")]
@@ -47,8 +45,6 @@ try {
         $stderr = Join-Path $root "run-$run.stderr.txt"
         $p = Start-Process -FilePath $Exe -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr
         try {
-            # Retain the native process handle before Refresh/exit. Windows PowerShell
-            # otherwise can report a null ExitCode for a Start-Process result.
             $null = $p.Handle
             $deadline = [DateTime]::UtcNow.AddSeconds(25)
             do {
@@ -60,13 +56,12 @@ try {
             if ($p.MainWindowHandle -eq 0) { throw "Run $run did not open a window within 25s" }
             $hwnd = $p.MainWindowHandle
             $class = [Text.StringBuilder]::new(256)
-            [void][ZeronWindowProbe]::GetClassName($hwnd, $class, $class.Capacity)
+            [void][OctodockWindowProbe]::GetClassName($hwnd, $class, $class.Capacity)
             [uint32]$owner = 0
-            [void][ZeronWindowProbe]::GetWindowThreadProcessId($hwnd, [ref]$owner)
+            [void][OctodockWindowProbe]::GetWindowThreadProcessId($hwnd, [ref]$owner)
             if ($owner -ne $p.Id -or $class.ToString() -eq 'ConsoleWindowClass') {
                 throw "Probe selected a non-application window (class=$class owner=$owner)"
             }
-            # Wait for real local engine boot, rather than closing the splash.
             $deadline = [DateTime]::UtcNow.AddSeconds(25)
             do {
                 $p.Refresh()
@@ -89,7 +84,6 @@ try {
         } finally {
             $p.Refresh()
             if (-not $p.HasExited) {
-                # Only the process created by this probe; never an existing engine.
                 $p.Kill()
                 $p.WaitForExit()
             }

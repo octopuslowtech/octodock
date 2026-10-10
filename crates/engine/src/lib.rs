@@ -593,7 +593,9 @@ impl Engine {
 
     /// Capture the workspace boundary once, before refresh or sign-in can mutate auth.
     pub fn initial_workspace_scope(auth: &Auth) -> WorkspaceScope {
-        if !auth.workos_enabled() {
+        if auth.is_local() {
+            WorkspaceScope::Local
+        } else if !auth.workos_enabled() {
             WorkspaceScope::Development
         } else if auth.loaded_workos_session() {
             WorkspaceScope::Synced

@@ -1,55 +1,31 @@
-# Zeron
+# Octodock
 
-Control your coding agents (Claude Code, Codex, Cursor, Devin, Grok, Hermes, Pi, Antigravity) locally by default, with optional multi-device sync.
+A local desktop controller for coding agents, based on [Zeron](https://github.com/zeronsh/zeron).
 
-*English | [简体中文](README.zh-CN.md) | [한국어](README.ko.md) | [日本語](README.ja.md)*
+## Desktop only
 
-![Zeron desktop app](docs/media/readme/app-screenshot.jpg)
+Octodock targets Linux, macOS, and Windows. Run coding agents, manage projects and conversations, inspect changes, and use local terminals and browser previews from one desktop application.
 
-## Desktop app
+No Octodock account, cloud backend, mobile app, or multi-device synchronization is required or enabled. Coding agents still use their own authentication and network connections.
 
-Download the latest release for your platform from [GitHub Releases](https://github.com/zeronsh/zeron/releases/latest):
+## Development
 
-- **macOS** — `zeron-<version>-macos-arm64.dmg`
-- **Windows** — `zeron-<version>-windows-x86_64-setup.exe`
-- **Linux** — `zeron-<version>-linux-<arch>.tar.gz`, then run its `install.sh`
-
-No account or network connection is needed; sessions stay on your device. The app updates itself.
-
-## Headless (CLI)
-
-For servers and other machines without a display, such as a VPS that keeps agents running after you close your laptop. Linux only:
-
-```bash
-curl -fsSL https://zeron.sh/install.sh | sh
-zeron status
+```sh
+cargo run --locked -p octodock
 ```
 
-The installer starts the engine as a background service that survives reboots.
+Internal `zeron-*` crate names and existing storage paths are retained for compatibility and easier upstream integration. Existing local sessions are not migrated or uploaded. The default local IPC port is 27655. Legacy `ZERON_*` settings remain available for local configuration, but cloud credentials cannot enable synchronization in the desktop entry point.
 
-```bash
-zeron status      # local/synced mode and engine status
-zeron daemon start|stop|restart|status
-```
+## Packaging
 
-## Multi-device sync (optional)
+- Linux: `scripts/package-linux.sh`
+- macOS: `scripts/package-macos.sh`
+- Windows: `scripts/package-windows.ps1` (requires Inno Setup 6)
 
-Sign in to start an agent on one device and follow or drive it from another:
+Packages are installed and updated manually. Releases belong to [octopuslowtech/octodock](https://github.com/octopuslowtech/octodock/releases), not Zeron.
 
-```bash
-zeron daemon stop
-zeron login        # or: zeron logout to return to local-only
-zeron daemon start
-```
+## Upstream updates
 
-Devices signed in to the same account can read and write each other's workspace files, so only sign in devices you trust. Existing local sessions are never uploaded.
+The Git `upstream` remote tracks Zeron. Preserve its history and integrate updates on a separate branch, resolving conflicts and testing before merging. Mobile and cloud entry points are intentionally excluded from this repository.
 
-## Sponsors
-
-Thank you to [The Context Company](https://www.thecontextcompany.com/) for sponsoring Zeron. You can help fund Zeron's development too by [becoming a sponsor on GitHub](https://github.com/sponsors/zeronsh).
-
----
-
-Developing or curious how it works? [Ask DeepWiki](https://deepwiki.com/zeronsh/zeron) or check out [ARCHITECTURE.md](ARCHITECTURE.md).
-
-Licensed under the [MIT License](LICENSE).
+Licensed under the [MIT License](LICENSE). Original attribution and [third-party notices](THIRD_PARTY_NOTICES.md) are preserved.

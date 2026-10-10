@@ -137,11 +137,11 @@ that window foreground and the display awake for the entire run. Replay uses
 an isolated profile and the bundled sanitized fixture; it makes no model API call.
 
 ```sh
-cargo build --release --locked -p zeron
+cargo build --release --locked -p octodock
 ZERON_FRAME_STATS=0 ZERON_PROFILE_IDLE_MS=10000 \
   CLAUDE_CODE_EXECUTABLE="$PWD/scripts/replay-claude.py" \
   ZERON_REPLAY_JOURNAL="$PWD/scripts/fixtures/resource-stream.jsonl" \
-  node scripts/resource-profile.mjs target/release/zeron /tmp/zeron-native claude-code
+  node scripts/resource-profile.mjs target/release/octodock /tmp/zeron-native claude-code
 
 # UI-only offscreen replay of those verified protocol frames:
 cargo build --release --locked -p zeron-ui --features resource-profile \

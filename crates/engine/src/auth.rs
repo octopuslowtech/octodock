@@ -289,6 +289,7 @@ impl Auth {
             None
         };
         let initial = match (&workos, &stored) {
+            _ if config.edge_url.is_empty() => AuthState::SignedOut,
             (None, _) => AuthState::SignedIn {
                 user: AuthUser {
                     id: config.dev_user_id.clone(),
@@ -359,6 +360,10 @@ impl Auth {
         Self::new(config)
     }
 
+    pub fn is_local(&self) -> bool {
+        self.inner.config.edge_url.is_empty()
+    }
+
     pub fn workos_enabled(&self) -> bool {
         self.inner.workos.is_some()
     }
@@ -383,6 +388,9 @@ impl Auth {
     /// Dev mode mirrors the edge's dev-bearer parsing (`user@org` → `user`,
     /// a bare token IS the user id). `None` = signed out (WorkOS only).
     pub fn user_id(&self) -> Option<String> {
+        if self.is_local() {
+            return None;
+        }
         if self.inner.workos.is_none() {
             let dev = &self.inner.config.dev_user_id;
             return Some(dev.split('@').next().unwrap_or(dev).to_string());
@@ -395,6 +403,9 @@ impl Auth {
     /// Dev mode: the configured user id. WorkOS: cached access token, refreshed when
     /// it has under 30s left.
     pub async fn access_token(&self) -> Result<String, TokenError> {
+        if self.is_local() {
+            return Err(TokenError::SignedOut);
+        }
         if self.inner.workos.is_none() {
             return Ok(self.inner.config.dev_user_id.clone());
         }

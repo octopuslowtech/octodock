@@ -10,6 +10,7 @@ use crate::popover;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OpenTargetLaunch {
     Command(PathBuf),
+    Terminal(PathBuf),
     FileManager,
     Url(String),
 }
@@ -70,13 +71,6 @@ const EDITORS: &[Editor] = &[
     editor("vscodium", "VSCodium", icons::VSCODE_MARK, None, &["codium"]),
     editor("zed", "Zed", icons::ZED_MARK, None, &["zed", "zeditor"]),
     editor(
-        "android-studio",
-        "Android Studio",
-        icons::TERMINAL,
-        None,
-        &["studio", "android-studio"],
-    ),
-    editor(
         "intellij-idea",
         "IntelliJ IDEA",
         icons::TERMINAL,
@@ -93,7 +87,6 @@ const EDITORS: &[Editor] = &[
         None,
         &["pycharm", "pycharm-professional", "pycharm-community"],
     ),
-    editor("rider", "Rider", icons::TERMINAL, None, &["rider", "rider64"]),
     editor("rubymine", "RubyMine", icons::TERMINAL, None, &["rubymine"]),
     editor("rustrover", "RustRover", icons::TERMINAL, None, &["rustrover"]),
     editor("webstorm", "WebStorm", icons::TERMINAL, None, &["webstorm"]),
@@ -111,6 +104,27 @@ const EXECUTABLE_EXTENSIONS: &[&str] = if cfg!(target_os = "windows") {
     &[".exe", ".cmd", ".bat"]
 } else {
     &[""]
+};
+
+const TERMINAL_COMMANDS: &[&str] = if cfg!(target_os = "macos") {
+    &["open"]
+} else if cfg!(target_os = "windows") {
+    &["cmd"]
+} else {
+    &[
+        "x-terminal-emulator",
+        "gnome-terminal",
+        "ptyxis",
+        "kgx",
+        "konsole",
+        "xfce4-terminal",
+        "ghostty",
+        "kitty",
+        "alacritty",
+        "wezterm",
+        "foot",
+        "xterm",
+    ]
 };
 
 fn resolve_command(commands: &[&str], path_var: Option<&OsStr>) -> Option<PathBuf> {
@@ -172,6 +186,15 @@ pub fn detect(cwd: &Path) -> Vec<OpenTarget> {
             })
         })
         .collect();
+    if let Some(command) = resolve_command(TERMINAL_COMMANDS, path_var.as_deref()) {
+        targets.push(OpenTarget {
+            id: "terminal",
+            label: "Terminal",
+            icon: icons::TERMINAL,
+            tint: None,
+            launch: OpenTargetLaunch::Terminal(command),
+        });
+    }
     targets.push(OpenTarget {
         id: "file-manager",
         label: FILE_MANAGER_LABEL,
@@ -196,18 +219,29 @@ pub fn preferred<'a>(targets: &'a [OpenTarget], id: Option<&str>) -> Option<&'a 
         .or_else(|| targets.first())
 }
 
+fn spawn_detached(command: &mut Command) -> std::io::Result<()> {
+    let mut child = command
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()?;
+    std::thread::spawn(move || {
+        let _ = child.wait();
+    });
+    Ok(())
+}
+
 pub fn open(target: &OpenTarget, cwd: &Path, cx: &App) -> std::io::Result<()> {
     match &target.launch {
-        OpenTargetLaunch::Command(command) => {
-            let mut child = Command::new(command)
-                .arg(cwd)
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .spawn()?;
-            std::thread::spawn(move || {
-                let _ = child.wait();
-            });
+        OpenTargetLaunch::Command(command) => spawn_detached(Command::new(command).arg(cwd))?,
+        OpenTargetLaunch::Terminal(command) => {
+            let mut terminal = Command::new(command);
+            if cfg!(target_os = "macos") {
+                terminal.args(["-a", "Terminal"]).arg(cwd);
+            } else if cfg!(target_os = "windows") {
+                terminal.args(["/C", "start", "cmd"]);
+            }
+            spawn_detached(terminal.current_dir(cwd))?;
         }
         OpenTargetLaunch::FileManager => cx.open_with_system(cwd),
         OpenTargetLaunch::Url(url) => cx.open_url(url),

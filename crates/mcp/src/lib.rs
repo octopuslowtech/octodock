@@ -42,7 +42,7 @@ impl McpConfig {
         let ipc_port = std::env::var("ZERON_IPC_PORT")
             .ok()
             .and_then(|p| p.parse().ok())
-            .unwrap_or(27654);
+            .unwrap_or(27655);
         Self {
             ipc_port,
             origin: Origin::from_env(),

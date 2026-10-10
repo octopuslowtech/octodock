@@ -367,12 +367,14 @@ pub const TITLEBAR_IDENTITY_GAP: f32 = Theme::SPACE_MD;
 /// A 28px action centered in the 38px titlebar with its 2px downward optical
 /// shift lands 6px from the top; use the same inset at the trailing edge.
 pub const TITLEBAR_ACTION_EDGE_INSET: f32 = 6.0;
-/// Width of the persistent top-left button cluster itself: a 24px sidebar
+pub const TITLEBAR_CONTROL_SIZE: f32 = 24.0;
+const HEADER_BUTTON_SIZE: f32 = 28.0;
+/// Width of the persistent top-left button cluster itself: the sidebar
 /// trigger.
-pub const CLUSTER_BUTTONS_WIDTH: f32 = 24.0;
+pub const CLUSTER_BUTTONS_WIDTH: f32 = TITLEBAR_CONTROL_SIZE;
 /// Extra width consumed when the collapsed-sidebar New Session action joins
 /// the left controls as its own group.
-pub const TITLEBAR_ACTION_SLOT_WIDTH: f32 = TITLEBAR_GROUP_GAP + 24.0;
+pub const TITLEBAR_ACTION_SLOT_WIDTH: f32 = TITLEBAR_GROUP_GAP + TITLEBAR_CONTROL_SIZE;
 /// Horizontal inset owned by the titlebar control row itself. Keep this value
 /// paired with [`Self::titlebar_spacer`]: using a different number for the
 /// spacer shifts every control while leaving the declared cluster geometry
@@ -385,12 +387,12 @@ const TITLEBAR_ICON_SIZE: f32 = if cfg!(target_os = "linux") {
 };
 
 /// Width of a row of `count` Linux caption buttons, drawn at the cluster's
-/// own 24px-button / 2px-gap rhythm.
+/// own button size / 2px-gap rhythm.
 pub fn caption_buttons_width(count: usize) -> f32 {
     if count == 0 {
         return 0.0;
     }
-    count as f32 * 24.0 + (count as f32 - 1.0) * 2.0
+    count as f32 * TITLEBAR_CONTROL_SIZE + (count as f32 - 1.0) * 2.0
 }
 
 /// Where the cluster's first button starts, from the window's left edge.
@@ -582,7 +584,7 @@ pub enum SettingsSection {
 
 impl SettingsSection {
     /// Sections shown in Settings. `Agents` is a legacy Accounts route alias.
-    pub const ALL: [SettingsSection; 11] = [
+    pub const ALL: [SettingsSection; 10] = [
         SettingsSection::General,
         SettingsSection::Appearance,
         SettingsSection::Notifications,
@@ -590,7 +592,6 @@ impl SettingsSection {
         SettingsSection::Shortcuts,
         SettingsSection::Harnesses,
         SettingsSection::Usage,
-        SettingsSection::Devices,
         SettingsSection::Files,
         SettingsSection::Appshots,
         SettingsSection::Archived,
@@ -607,7 +608,8 @@ impl SettingsSection {
     }
 
     fn visible_in_nav(self) -> bool {
-        self != Self::Agents && (self != Self::Appshots || crate::appshots::is_desktop())
+        !matches!(self, Self::Agents | Self::Devices)
+            && (self != Self::Appshots || crate::appshots::is_desktop())
     }
 
     /// Where a generic "open Settings" lands for a remembered section: legacy
@@ -1343,8 +1345,8 @@ impl WidthTween {
 
 fn titlebar_island_vertical_geometry(progress: f32) -> (f32, f32) {
     // Match the padded flex row's center, not the raw titlebar center.
-    // Keep the native 24px controls untouched and give them 4px of air.
-    let height = 28.0 + 4.0 * progress.clamp(0.0, 1.0);
+    // Keep the native controls untouched and give them 4px of air.
+    let height = TITLEBAR_CONTROL_SIZE + 4.0 + 4.0 * progress.clamp(0.0, 1.0);
     let center = (Theme::TITLEBAR_HEIGHT + Theme::TITLEBAR_TOP_PAD) * 0.5;
     (center - height * 0.5, height)
 }
@@ -4732,7 +4734,7 @@ impl Shell {
         };
         if let Some(link) = link {
             cx.write_to_clipboard(ClipboardItem::new_string(link));
-            self.sidebar_notice = Some("Zeron conversation link copied".into());
+            self.sidebar_notice = Some("Octodock conversation link copied".into());
         } else {
             self.sidebar_notice = Some("Conversation link is not ready yet".into());
         }
@@ -4828,7 +4830,7 @@ impl Shell {
     }
 
     pub(crate) fn open_settings(&mut self, section: SettingsSection, cx: &mut Context<Self>) {
-        let section = section.canonical();
+        let section = section.reopenable();
         self.command_palette = None;
         // Recreate per visit: the page's ListHarnesses load re-probes which
         // CLIs are installed, so installing one shows up on the next open.
@@ -6220,6 +6222,9 @@ impl Shell {
     }
 
     fn start_sign_in(&mut self, cx: &mut Context<Self>) {
+        if self.boot.edge_url.is_empty() {
+            return;
+        }
         let scope = self.state.read(cx).workspace_scope;
         if scope == Some(WorkspaceScope::Development) {
             return;
@@ -8728,7 +8733,11 @@ impl Shell {
     ) -> AnyElement {
         let theme = &theme.for_popup();
         let open = self.user_menu.is_open();
-        let action = account_menu_action(self.state.read(cx).workspace_scope, self.sync_flow);
+        let action = if self.boot.edge_url.is_empty() {
+            None
+        } else {
+            account_menu_action(self.state.read(cx).workspace_scope, self.sync_flow)
+        };
         // The profile pill hugs avatar + name (shrinking so long names fade
         // out); the gap between it and the settings button is not interactive.
         let initial: SharedString = user_line
@@ -11698,7 +11707,7 @@ impl Shell {
                         .text_size(crate::typography::ui_rems(18.0))
                         .font_weight(gpui::FontWeight::SEMIBOLD)
                         .text_color(theme.text)
-                        .child(SharedString::from("Log in to Zeron")),
+                        .child(SharedString::from("Log in to Octodock")),
                 )
                 .child(
                     div()
@@ -12101,7 +12110,7 @@ fn window_control_button_with(
     let fade_key = format!("window-control-{id}");
     div()
         .id(id)
-        .size(px(24.0))
+        .size(px(TITLEBAR_CONTROL_SIZE))
         .flex_none()
         .flex()
         .items_center()
@@ -12219,7 +12228,7 @@ fn linux_caption_button(
         // gpui svgs don't inherit the div's text color — recolor the glyph
         // on hover through the group instead (zed's WindowControl idiom).
         .group("linux-caption-button")
-        .size(px(24.0))
+        .size(px(TITLEBAR_CONTROL_SIZE))
         .flex_none()
         .flex()
         .items_center()
@@ -12257,7 +12266,7 @@ fn nav_history_button(
 ) -> AnyElement {
     if !enabled {
         return div()
-            .size(px(24.0))
+            .size(px(TITLEBAR_CONTROL_SIZE))
             .flex_none()
             .flex()
             .items_center()
@@ -12301,7 +12310,7 @@ fn header_icon_button_with(
     let fade_key = format!("header-icon-{id}");
     div()
         .id(id)
-        .size(px(28.0))
+        .size(px(HEADER_BUTTON_SIZE))
         .flex_none()
         .flex()
         .items_center()
@@ -17032,6 +17041,7 @@ mod settings_modal_regressions {
 
     #[test]
     fn remembered_sections_reopen_only_where_the_nav_can_show_them() {
+        assert_eq!(SettingsSection::Devices.reopenable(), SettingsSection::General);
         assert_eq!(
             SettingsSection::Shortcuts.reopenable(),
             SettingsSection::Shortcuts

@@ -1,0 +1,14 @@
+[Desktop Entry]
+Type=Application
+Name=Octodock
+GenericName=Coding Agent Controller
+Comment=Local desktop controller for coding agents
+Exec=octodock %u
+TryExec=octodock
+Icon=octodock
+Terminal=false
+StartupNotify=true
+Categories=Development;Utility;
+Keywords=agent;claude;codex;ai;coding;
+StartupWMClass=octodock
+MimeType=x-scheme-handler/octodock;

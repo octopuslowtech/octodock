@@ -21,7 +21,7 @@ The fixture uses synthetic chat data, temporary app storage, and a local HTTP se
 
 ```sh
 cargo test -p zeron-ui
-cargo build -p zeron
+cargo build -p octodock
 cargo build -p zeron-ui --example browser-fixture --features browser-fixture
 ZERON_TRANSCRIPT_LINK_FIXTURE_ONLY=1 \
   BROWSER_FIXTURE_BINARY=target/debug/examples/browser-fixture \
@@ -45,8 +45,8 @@ Native runtime-failure validation can be run on Linux by placing an empty `libwe
 ## Validation recorded for this change
 
 - `cargo test -p zeron-ui`: 916 tests passed, plus doc tests.
-- `cargo build -p zeron`: passed.
-- `cargo check -p zeron`: passed.
+- `cargo build -p zeron`: passed (historical validation before the Octodock rename).
+- `cargo check -p zeron`: passed (historical validation before the Octodock rename).
 - Rustfmt checks passed for the modified library modules and the new native scenario; shell syntax and whitespace checks passed. The existing browser fixture's formatting was preserved.
 - Linux X11: native input, clipboard, navigation, tab ownership/close, and visual disclosure over WebKitGTK verified.
 - Linux Wayland: native pointer, clipboard, keyboard actions, navigation, and tab close assertions passed in nested Weston. Captures did not reliably reflect updated frames, including with software Vulkan and an explicit frame request; visual verification of Wayland overlays remains outstanding.

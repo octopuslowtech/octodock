@@ -83,6 +83,6 @@ Existing resize, row-reveal, overflow, editing, transcript, and picker tests rem
 in the full suite. Validation commands:
 
 ```sh
-cargo build --release --locked -p zeron
+cargo build --release --locked -p octodock
 cargo test --locked -p zeron-ui --lib -- --test-threads=1
 ```

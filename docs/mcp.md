@@ -263,7 +263,7 @@ both the MCP transport and engine support concurrent chat runs.
 ## Smoke recipe
 
 ```sh
-BIN=target/debug/zeron
+BIN=target/debug/octodock
 { echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}'
   echo '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"list_chats","arguments":{"limit":5}}}'
   sleep 5; } | ZERON_IPC_PORT=27655 $BIN mcp

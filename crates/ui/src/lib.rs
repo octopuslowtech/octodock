@@ -85,7 +85,7 @@ pub use state::EngineBootConfig;
 pub use zeron_proto::HarnessId;
 
 /// Everything the headed binary passes in (config/env resolution lives in
-/// `apps/zeron`, not here).
+/// `apps/octodock`, not here).
 #[derive(Debug, Clone)]
 pub struct UiConfig {
     /// Data directory — engine stores + `ui-settings.json`.
@@ -204,7 +204,7 @@ pub fn run_app(config: UiConfig) {
         appshots::set_enabled(ui_settings.appshots_enabled);
         terminal::panel::init(cx);
         app_menus::init(cx);
-        cx.register_url_scheme("zeron").detach();
+        cx.register_url_scheme("octodock").detach();
 
         let state = cx.new(|cx| {
             let mut state = state::AppState::new();
@@ -402,7 +402,7 @@ fn open_main_window(
                 // Linux/Windows `appears_transparent` hides the system titlebar
                 // for our custom-drawn chrome; harmless where unsupported.
                 titlebar: Some(TitlebarOptions {
-                    title: cfg!(target_os = "windows").then(|| "Zeron".into()),
+                    title: cfg!(target_os = "windows").then(|| "Octodock".into()),
                     appears_transparent: true,
                     // Native lights are 14px tall: top 14 → center 21, matching
                     // the 38px titlebar row with 4px top-only content padding.
@@ -432,7 +432,7 @@ fn open_main_window(
                 // — if these two ever disagree, vibrancy dies on the first theme
                 // change and never comes back.
                 window_background: theme::Theme::of(cx).window_background_appearance(),
-                app_id: Some("zeron".into()),
+                app_id: Some("octodock".into()),
                 ..Default::default()
             },
             move |window, cx| {
@@ -590,7 +590,7 @@ fn deliver_appshot(
             }
             tracing::warn!(
                 count,
-                "Appshot captured with no Zeron window; preserving it for the next delivery"
+                "Appshot captured with no Octodock window; preserving it for the next delivery"
             );
         }
         return;

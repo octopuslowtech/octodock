@@ -186,14 +186,14 @@ replay without an API call. Use a dedicated display and fresh output directories
 the driver requires exactly one Zeron window.
 
 ```sh
-cargo build --release -p zeron
+cargo build --release -p octodock
 Xvfb :98 -screen 0 1440x900x24 -nolisten tcp
 # In another terminal:
 DISPLAY=:98 WAYLAND_DISPLAY= LP_NUM_THREADS=4 ZERON_FRAME_STATS=0 \
   ZERON_PROFILE_PSS=1 ZERON_PROFILE_IDLE_MS=45000 \
   CLAUDE_CODE_EXECUTABLE="$PWD/scripts/replay-claude.py" \
   ZERON_REPLAY_JOURNAL="$PWD/scripts/fixtures/resource-stream.jsonl" \
-  node scripts/resource-profile.mjs target/release/zeron /tmp/zeron-short claude-code
+  node scripts/resource-profile.mjs target/release/octodock /tmp/zeron-short claude-code
 
 # Use LP_NUM_THREADS=1 for the one-worker check.
 # Add ZERON_REPLAY_REPEAT=10 ZERON_REPLAY_DELAY_MS=8 for the long workload.

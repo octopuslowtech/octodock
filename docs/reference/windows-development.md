@@ -25,11 +25,11 @@ and Git for Windows. On ARM64 also install LLVM so `clang` is on PATH —
 alone is not enough. Then run:
 
 ```powershell
-cargo run --locked -p zeron
+cargo run --locked -p octodock
 ```
 
 Close the app before rebuilding. For release builds, use
-`cargo build --release --locked -p zeron`. If shader compiler discovery fails,
+`cargo build --release --locked -p octodock`. If shader compiler discovery fails,
 set `GPUI_FXC_PATH` to the Windows SDK's `fxc.exe`.
 
 ## Configuration and agent support

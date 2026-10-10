@@ -440,6 +440,23 @@ async fn workspace_recovers_from_an_unreachable_edge_without_restarting() {
 }
 
 #[tokio::test]
+async fn desktop_without_an_edge_uses_local_storage() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = config(dir.path(), String::new(), None, None);
+    let auth = Engine::build_auth(&config).await;
+    let scope = Engine::initial_workspace_scope(&auth);
+    assert_eq!(scope, WorkspaceScope::Local);
+    assert!(!auth.state().is_signed_in());
+    assert!(auth.user_id().is_none());
+    assert!(matches!(auth.access_token().await, Err(zeron_rpc::TokenError::SignedOut)));
+    let profile = Engine::resolve_profile(&config, &auth, scope).unwrap().unwrap();
+    let runtime = Engine::assemble_runtime(&config, auth, profile).await.unwrap();
+    assert_eq!(runtime.workspace_scope(), WorkspaceScope::Local);
+    assert!(runtime.core().links().is_none());
+    runtime.shutdown().await;
+}
+
+#[tokio::test]
 async fn development_without_an_explicit_bearer_stays_offline() {
     let dir = tempfile::tempdir().unwrap();
     let (edge_url, requests, edge_task) = rejecting_edge().await;

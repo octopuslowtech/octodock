@@ -6,7 +6,7 @@ on:
       - 'Cargo.toml'
       - 'Cargo.lock'
       - 'rust-toolchain.toml'
-      - 'apps/zeron/**'
+      - 'apps/octodock/**'
       - 'dist/windows/**'
       - 'crates/**'
       - 'scripts/test-windows-*.ps1'
@@ -18,7 +18,7 @@ on:
       - 'Cargo.toml'
       - 'Cargo.lock'
       - 'rust-toolchain.toml'
-      - 'apps/zeron/**'
+      - 'apps/octodock/**'
       - 'dist/windows/**'
       - 'crates/**'
       - 'scripts/test-windows-*.ps1'
@@ -76,7 +76,7 @@ jobs:
       - name: Shader layout tests
         run: cargo test --release --locked -p gpui_windows --lib layout
       - name: Application tests
-        run: cargo test --release --locked -p zeron
+        run: cargo test --release --locked -p octodock
 
   engine-tests:
     runs-on: windows-2022
@@ -98,9 +98,9 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: ./.github/actions/windows-ci-setup
       - name: Build application
-        run: cargo build --release --locked -p zeron
+        run: cargo build --release --locked -p octodock
       - name: Verify portable and installer packaging
-        run: ./scripts/package-windows.ps1 -ReleasesUrl "https://github.com/$env:GITHUB_REPOSITORY/releases/latest/download"
+        run: ./scripts/package-windows.ps1
       - name: Installer install/uninstall
         run: ./scripts/test-windows-installer.ps1
       - name: GUI subsystem and redirected CLI output
@@ -116,7 +116,7 @@ jobs:
           $env:LOCALAPPDATA = Join-Path $env:RUNNER_TEMP "zeron smoke O'Brien 日本語"
           $expected = Join-Path $env:LOCALAPPDATA 'Zeron'
           $probe = [Diagnostics.ProcessStartInfo]::new()
-          $probe.FileName = (Resolve-Path -LiteralPath './target/release/zeron.exe').Path
+          $probe.FileName = (Resolve-Path -LiteralPath './target/release/octodock.exe').Path
           $probe.Arguments = 'status'
           $probe.UseShellExecute = $false
           $probe.CreateNoWindow = $true
@@ -149,7 +149,7 @@ jobs:
         with:
           name: windows-gui-binaries
           path: |
-            target/release/zeron.exe
+            target/release/octodock.exe
             target/release/examples/windows-render-fixture.exe
           if-no-files-found: error
           retention-days: 1
