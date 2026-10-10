@@ -3,8 +3,6 @@ use super::actions_ui::{
 };
 use super::*;
 
-use gpui::AppContext as _;
-
 use crate::open_targets::{self, OpenTarget, OpenTargetsController};
 
 const OPEN_IN_MENU_WIDTH: f32 = 176.0;
