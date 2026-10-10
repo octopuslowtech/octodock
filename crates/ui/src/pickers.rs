@@ -502,6 +502,7 @@ pub enum PickerKind {
     /// (reasoning ladder + model options) at the bottom — one trigger, one
     /// card (the separate Traits popover folded in here).
     HarnessModel,
+    Reasoning,
     /// New-session canvas only: which project the session mints into. A pick
     /// re-keys everything project-derived (refs, harness/model catalogs) via
     /// the state observer.
@@ -776,6 +777,7 @@ impl Pickers {
             // Pasted images/files don't apply to a search box.
             ComposerInputEvent::PastedImages(_)
             | ComposerInputEvent::PastedPaths(_)
+            | ComposerInputEvent::PastedPrompt { .. }
             | ComposerInputEvent::PastedText { .. }
             | ComposerInputEvent::OpenAttachment(_)
             | ComposerInputEvent::CursorMoved
@@ -1337,6 +1339,12 @@ impl Pickers {
             self.compact_keyboard = false;
             self.compact_motion = compact::CompactMotion::default();
         }
+        if kind == PickerKind::Reasoning {
+            self.open_model_height =
+                reasoning_menu_height(self.compact_effort(cx).map_or(0, |e| e.labels.len()));
+            self.setting_menu = None;
+            self.setting_bounds = None;
+        }
         self.open.open(kind);
         self.focus_on_mount = true;
         // The plain-div menus (branch / project / device) share one scroll
@@ -1389,6 +1397,7 @@ impl Pickers {
             PickerKind::HarnessModel => self.selected_model_index(cx),
             PickerKind::Space => self.selected_project_index(cx),
             PickerKind::Device => self.selected_device_index(cx),
+            PickerKind::Reasoning => NO_ACTIVE_ROW,
         };
         if kind == PickerKind::HarnessModel {
             // scroll_to_item below may land anywhere; the first note of the
@@ -1449,6 +1458,10 @@ impl Pickers {
             }
             // Projects and devices are already synced state — nothing to load.
             PickerKind::Space | PickerKind::Device => {}
+            PickerKind::Reasoning => {}
+        }
+        if kind == PickerKind::HarnessModel && self.compact_model_picker(cx) {
+            self.show_compact_models(cx);
         }
         cx.notify();
     }
@@ -3012,6 +3025,7 @@ impl Pickers {
                     }
                     Some(PickerKind::Space) => self.filtered_project_rows(cx).len() + 1,
                     Some(PickerKind::Device) => self.filtered_device_rows(cx).len(),
+                    Some(PickerKind::Reasoning) => 0,
                     None => 0,
                 };
                 let current = (self.active != NO_ACTIVE_ROW).then_some(self.active);
@@ -3199,6 +3213,7 @@ impl Pickers {
             PickerKind::HarnessModel => "picker-model",
             PickerKind::Space => "picker-space",
             PickerKind::Device => "picker-device",
+            PickerKind::Reasoning => "picker-reasoning",
         };
         // Hover state is keyed globally: two composers on screen (main +
         // side chat) must not light each other's chips, so the key carries
@@ -3225,7 +3240,7 @@ impl Pickers {
             // The model trigger sits beside the right-hand composer actions.
             // Its own padding participates in that visible gap; footer and
             // destination triggers keep their wider independent hit areas.
-            .px(px(if kind == PickerKind::HarnessModel {
+            .px(px(if matches!(kind, PickerKind::HarnessModel | PickerKind::Reasoning) {
                 6.0
             } else {
                 10.0
@@ -3796,9 +3811,11 @@ impl Pickers {
         popover::popover_card_flush(&theme)
             .w(px(width))
             .h(px(self.menu_geometry().height.min(self.open_model_height)))
-            .when(self.compact_model_picker(cx), |el| {
-                el.h(px(self.compact_motion.frame_height))
-            })
+            .when(
+                self.compact_model_picker(cx)
+                    && self.mounted_kind() != Some(PickerKind::Reasoning),
+                |el| el.h(px(self.compact_motion.frame_height)),
+            )
             .track_focus(&self.focus)
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 this.on_key_down(event, window, cx)
@@ -3868,6 +3885,7 @@ impl Pickers {
                         }
                         // Projects/devices load nothing; no retry surface exists.
                         PickerKind::Space | PickerKind::Device => {}
+                        PickerKind::Reasoning => {}
                     }))
                     .child(SharedString::from("Retry")),
             )
@@ -5125,6 +5143,45 @@ impl Pickers {
         self.render_setting_rows(SettingScope::Tray, cx)
     }
 
+    fn render_reasoning_popover(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        let theme = Theme::of(cx).for_popup();
+        let (labels, selected) = self
+            .compact_effort(cx)
+            .map(|e| (e.labels, e.selected))
+            .unwrap_or_default();
+        div()
+            .id("reasoning-popover-body")
+            .flex()
+            .flex_col()
+            .gap(px(popover::MENU_GAP))
+            .p(px(popover::CARD_INSET))
+            .overflow_y_scroll()
+            .children(labels.into_iter().enumerate().map(|(ix, label)| {
+                popover::menu_row(&theme, false, format!("reasoning-level-{ix}"))
+                    .id(("reasoning-level", ix))
+                    .h(px(30.0))
+                    .py(px(0.0))
+                    .flex_none()
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        if let Some(effort) = this.compact_effort(cx) {
+                            this.pick_compact_effort(effort, ix, cx);
+                        }
+                        this.close(cx);
+                        cx.stop_propagation();
+                    }))
+                    .child(label)
+                    .child(div().flex_1())
+                    .when(ix == selected, |el| {
+                        el.child(
+                            crate::icons::icon(crate::icons::CHECK)
+                                .size(px(14.0))
+                                .text_color(theme.text),
+                        )
+                    })
+            }))
+            .into_any_element()
+    }
+
     /// Setting triggers for the tray or a hover card. Card rows stay out of
     /// the keyboard cursor, and its switches render separately.
     fn render_setting_rows(&mut self, scope: SettingScope, cx: &mut Context<Self>) -> AnyElement {
@@ -5905,6 +5962,10 @@ fn model_menu_height(setting_count: usize) -> f32 {
     82.0 + 216.0 + tray
 }
 
+fn reasoning_menu_height(levels: usize) -> f32 {
+    (levels as f32 * 32.0 + 2.0 * popover::CARD_INSET).min(300.0)
+}
+
 fn model_menu_budgets(height: f32, setting_count: usize) -> (f32, f32) {
     let body = (height - 82.0).max(0.0);
     let desired_tray = if setting_count == 0 {
@@ -6179,6 +6240,13 @@ impl Render for Pickers {
                 };
                 Some((PickerKind::HarnessModel, menu))
             }
+            Some(PickerKind::Reasoning) => {
+                let content = self.render_reasoning_popover(cx);
+                Some((
+                    PickerKind::Reasoning,
+                    self.popover_frame_flush(240.0, content, cx),
+                ))
+            }
             None => None,
         };
 
@@ -6186,16 +6254,15 @@ impl Render for Pickers {
         // brand icon + model name, then the effort as the chip's muted second
         // tone — the ladder's level, else an effort option's choice (Cursor).
         // None for the title picker (titles always run at minimal reasoning).
-        let chip_suffix = effort
+        let chip_suffix: Option<SharedString> = effort
             .filter(|_| self.title.is_none())
-            .map(|level| (SharedString::from(reasoning_label(level)), None))
+            .map(|level| SharedString::from(reasoning_label(level)))
             .or_else(|| {
                 self.title
                     .is_none()
                     .then(|| self.compact_effort(cx))
                     .flatten()
                     .and_then(|e| e.labels.get(e.selected).cloned())
-                    .map(|label| (label, None))
             });
         let fast = self.selected_model(cx).is_some_and(|model| {
             model.options.iter().any(|option| {
@@ -6212,7 +6279,7 @@ impl Render for Pickers {
         let chip_width = self.model_chip_width(
             window,
             &model_label,
-            chip_suffix.as_ref().map(|(text, _)| text),
+            None,
             chip_label_loading,
             fast,
             cx,
@@ -6225,7 +6292,7 @@ impl Render for Pickers {
                 Some(harness_icon),
                 chip_icon_loading,
                 chip_label_loading,
-                chip_suffix,
+                None,
                 &theme,
                 cx,
             )
@@ -6248,6 +6315,22 @@ impl Render for Pickers {
             "model-popover",
             closing,
         );
+        let has_traits = self.title.is_none() && self.compact_effort(cx).is_some();
+        let thinking_text = chip_suffix;
+        let thinking_chip = has_traits.then(|| {
+            let chip = self.trigger_chip(
+                PickerKind::Reasoning,
+                thinking_text.unwrap_or_else(|| "Auto".into()),
+                true,
+                None,
+                false,
+                false,
+                None,
+                &theme,
+                cx,
+            );
+            attach_overlay_end(chip, &mut overlay, PickerKind::Reasoning, "reasoning-popover", closing)
+        });
         div()
             .flex()
             .flex_row()
@@ -6260,6 +6343,7 @@ impl Render for Pickers {
             .min_w_0()
             .gap(px(4.0))
             .child(model_chip)
+            .children(thinking_chip)
     }
 }
 
@@ -8916,7 +9000,7 @@ mod tests {
         handle
             .update(cx, |picker, window, cx| {
                 picker.open_model_menu(window, cx);
-                assert!(!picker.compact_model_list);
+                assert!(picker.compact_model_list);
                 // Models from every offered provider are directly selectable.
                 picker.show_compact_models(cx);
                 assert_eq!(picker.model_rows_len(cx), 2);
@@ -8966,9 +9050,6 @@ mod tests {
             })
             .unwrap();
         cx.update_window(handle.into(), |_, window, cx| window.draw(cx).clear())
-            .unwrap();
-        handle
-            .read_with(cx, |picker, _| assert!(picker.effort_bounds.is_some()))
             .unwrap();
         handle
             .update(cx, |picker, _, cx| {

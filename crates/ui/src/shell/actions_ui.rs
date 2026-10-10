@@ -559,31 +559,7 @@ impl Shell {
         let menu_mounted = self.project_actions.menu.get().is_some();
         let menu_closing = self.project_actions.menu.closing_since();
 
-        // A solid frosted pill in the composer's material and edge —
-        // with the frost on its own back layer so the dropdown menu (a
-        // deferred child) never lands inside the blur.
-        let mut control = div()
-            .relative()
-            .flex_none()
-            .flex()
-            .flex_row()
-            .items_center()
-            .h(px(ACTION_CONTROL_HEIGHT))
-            .rounded(px(ACTION_CONTROL_RADIUS))
-            .occlude()
-            .child(
-                div().absolute().inset_0().child(crate::frost::frosted(
-                    ACTION_CONTROL_RADIUS,
-                    crate::frost::MENU_BLUR,
-                    div()
-                        .size_full()
-                        .rounded(px(ACTION_CONTROL_RADIUS))
-                        .border_1()
-                        .border_color(theme.composer_surface_border())
-                        .bg(action_fill(&theme, false))
-                        .when(!theme.is_frost(), |el| el.shadow_sm()),
-                )),
-            );
+        let mut control = action_control(&theme);
 
         if loading {
             control = control
@@ -609,7 +585,13 @@ impl Shell {
                         .when(show_label, |el| el.child("Loading…")),
                 )
                 .child(action_divider(&theme))
-                .child(action_chevron(&theme, false, |_, _, _| {}));
+                .child(action_chevron(
+                    &theme,
+                    "project-actions-chevron",
+                    "Project actions",
+                    false,
+                    |_, _, _| {},
+                ));
         } else if let Some(action) = preferred.clone() {
             let run_action = action.clone();
             let run_key = key.clone();
@@ -646,6 +628,8 @@ impl Shell {
             control = control.child(main).child(action_divider(&theme)).child(
                 action_chevron(
                     &theme,
+                    "project-actions-chevron",
+                    "Project actions",
                     true,
                     cx.listener(|this, _, _, cx| this.toggle_project_actions_menu(cx)),
                 )
@@ -695,6 +679,8 @@ impl Shell {
                 control = control.child(action_divider(&theme)).child(
                     action_chevron(
                         &theme,
+                        "project-actions-chevron",
+                        "Project actions",
                         true,
                         cx.listener(|this, _, _, cx| this.toggle_project_actions_menu(cx)),
                     )
@@ -1087,7 +1073,35 @@ fn project_action_params(
 }
 
 const ACTION_CONTROL_HEIGHT: f32 = 24.0;
-const ACTION_CONTROL_RADIUS: f32 = 7.0;
+pub(super) const ACTION_CONTROL_RADIUS: f32 = 7.0;
+
+/// A solid frosted pill in the composer's material and edge —
+/// with the frost on its own back layer so the dropdown menu (a
+/// deferred child) never lands inside the blur.
+pub(super) fn action_control(theme: &Theme) -> gpui::Div {
+    div()
+        .relative()
+        .flex_none()
+        .flex()
+        .flex_row()
+        .items_center()
+        .h(px(ACTION_CONTROL_HEIGHT))
+        .rounded(px(ACTION_CONTROL_RADIUS))
+        .occlude()
+        .child(
+            div().absolute().inset_0().child(crate::frost::frosted(
+                ACTION_CONTROL_RADIUS,
+                crate::frost::MENU_BLUR,
+                div()
+                    .size_full()
+                    .rounded(px(ACTION_CONTROL_RADIUS))
+                    .border_1()
+                    .border_color(theme.composer_surface_border())
+                    .bg(action_fill(theme, false))
+                    .when(!theme.is_frost(), |el| el.shadow_sm()),
+            )),
+        )
+}
 
 /// The pill's fill (or its hover): the composer's own material and edge, so
 /// the two read as one family. Hover is a faint wash over that dark fill —
@@ -1100,7 +1114,11 @@ fn action_fill(theme: &Theme, hover: bool) -> gpui::Hsla {
     }
 }
 
-fn action_segment(theme: &Theme, id: &'static str, enabled: bool) -> gpui::Stateful<gpui::Div> {
+pub(super) fn action_segment(
+    theme: &Theme,
+    id: &'static str,
+    enabled: bool,
+) -> gpui::Stateful<gpui::Div> {
     // Hover tints on top of the fill, so both halves stay one piece.
     let hover = action_fill(theme, true);
     div()
@@ -1120,7 +1138,7 @@ fn action_segment(theme: &Theme, id: &'static str, enabled: bool) -> gpui::State
 
 /// The split's seam: an inset hairline, not a full-height border, so the
 /// pill still reads as one solid piece.
-fn action_divider(theme: &Theme) -> gpui::Div {
+pub(super) fn action_divider(theme: &Theme) -> gpui::Div {
     div()
         .relative()
         .flex_none()
@@ -1129,14 +1147,16 @@ fn action_divider(theme: &Theme) -> gpui::Div {
         .bg(theme.text.opacity(0.14))
 }
 
-fn action_chevron(
+pub(super) fn action_chevron(
     theme: &Theme,
+    id: &'static str,
+    tooltip: &'static str,
     enabled: bool,
     on_click: impl Fn(&gpui::ClickEvent, &mut Window, &mut App) + 'static,
 ) -> gpui::Stateful<gpui::Div> {
     let hover = action_fill(theme, true);
     div()
-        .id("project-actions-chevron")
+        .id(id)
         .h_full()
         .relative()
         .flex_none()
@@ -1154,7 +1174,7 @@ fn action_chevron(
                     cx.stop_propagation();
                     on_click(event, window, cx)
                 })
-                .tooltip(crate::settings::widgets::text_tooltip("Project actions"))
+                .tooltip(crate::settings::widgets::text_tooltip(tooltip))
         })
         .child(
             icon(icons::ALT_ARROW_DOWN)

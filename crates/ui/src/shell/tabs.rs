@@ -48,6 +48,8 @@ struct PanelTitlebarWidths {
 /// row gap they cost the project-actions control.
 const SESSION_CONTROLS_WIDTH: f32 = 28.0 * 2.0 + 2.0 + 8.0;
 
+const OPEN_IN_CONTROL_WIDTH: f32 = 29.0 + 1.0 + 22.0 + 8.0;
+
 /// The two fixed right-edge anchors: the explorer toggle and the pane toggle
 /// (28px each) with the same 4px gap the surface strip keeps between its
 /// controls, so the two never render as one fused block.
@@ -594,8 +596,16 @@ impl Shell {
                     .when(busy, |el| el.opacity(0.4)),
                 )
         });
+        let open_in = (!takeover && !on_canvas)
+            .then(|| self.render_open_in_control(cx))
+            .flatten();
         let available_titlebar_width = if session_controls.is_some() {
             (available_titlebar_width - SESSION_CONTROLS_WIDTH).max(0.0)
+        } else {
+            available_titlebar_width
+        };
+        let available_titlebar_width = if open_in.is_some() {
+            (available_titlebar_width - OPEN_IN_CONTROL_WIDTH).max(0.0)
         } else {
             available_titlebar_width
         };
@@ -663,6 +673,7 @@ impl Shell {
             .child(div().flex_1())
             .children(session_controls)
             .children(actions)
+            .children(open_in)
             .children(trailing);
 
         // The unified window titlebar: full-width on the glass shell, ABOVE

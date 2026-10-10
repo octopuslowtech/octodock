@@ -322,6 +322,7 @@ pub struct TerminalPanel {
     state: Entity<AppState>,
     focus_handle: FocusHandle,
     focus_pending: bool,
+    ime_preedit: String,
     chats: HashMap<String, ChatTabs>,
     /// Shell-driven visibility gate: no RPC happens while closed (lazy).
     open: bool,
@@ -368,6 +369,7 @@ impl TerminalPanel {
             state,
             focus_handle: cx.focus_handle(),
             focus_pending: false,
+            ime_preedit: String::new(),
             chats: HashMap::new(),
             open: false,
             embedded: false,
@@ -395,6 +397,10 @@ impl TerminalPanel {
 
     pub fn focus_handle(&self) -> FocusHandle {
         self.focus_handle.clone()
+    }
+
+    pub fn ime_preedit(&self) -> &str {
+        &self.ime_preedit
     }
 
     /// Claim focus once the terminal body mounts, after opening or selecting it.
@@ -1685,6 +1691,94 @@ impl TerminalPanel {
     }
 }
 
+impl gpui::EntityInputHandler for TerminalPanel {
+    fn text_for_range(
+        &mut self,
+        _: std::ops::Range<usize>,
+        _: &mut Option<std::ops::Range<usize>>,
+        _: &mut Window,
+        _: &mut Context<Self>,
+    ) -> Option<String> {
+        None
+    }
+
+    fn selected_text_range(
+        &mut self,
+        _: bool,
+        _: &mut Window,
+        _: &mut Context<Self>,
+    ) -> Option<gpui::UTF16Selection> {
+        Some(gpui::UTF16Selection {
+            range: 0..0,
+            reversed: false,
+        })
+    }
+
+    fn marked_text_range(
+        &self,
+        _: &mut Window,
+        _: &mut Context<Self>,
+    ) -> Option<std::ops::Range<usize>> {
+        (!self.ime_preedit.is_empty()).then(|| 0..self.ime_preedit.encode_utf16().count())
+    }
+
+    fn unmark_text(&mut self, _: &mut Window, cx: &mut Context<Self>) {
+        self.ime_preedit.clear();
+        cx.notify();
+    }
+
+    fn replace_text_in_range(
+        &mut self,
+        _: Option<std::ops::Range<usize>>,
+        text: &str,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.ime_preedit.clear();
+        self.queue_input(text.as_bytes(), cx);
+        cx.notify();
+    }
+
+    fn replace_and_mark_text_in_range(
+        &mut self,
+        _: Option<std::ops::Range<usize>>,
+        new_text: &str,
+        _: Option<std::ops::Range<usize>>,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.ime_preedit = new_text.to_owned();
+        cx.notify();
+    }
+
+    fn bounds_for_range(
+        &mut self,
+        _: std::ops::Range<usize>,
+        _: gpui::Bounds<Pixels>,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<gpui::Bounds<Pixels>> {
+        let geometry = self.geometry?;
+        let cursor = self.active_tab(cx)?.emulator.cursor()?;
+        Some(gpui::Bounds::new(
+            gpui::point(
+                geometry.origin.x + px(geometry.cell_w * cursor.col as f32),
+                geometry.origin.y + px(geometry.line_h * cursor.row as f32),
+            ),
+            gpui::size(px(geometry.cell_w), px(geometry.line_h)),
+        ))
+    }
+
+    fn character_index_for_point(
+        &mut self,
+        _: gpui::Point<Pixels>,
+        _: &mut Window,
+        _: &mut Context<Self>,
+    ) -> Option<usize> {
+        None
+    }
+}
+
 impl ScrollRailHost for TerminalPanel {
     fn rail_bar(&mut self) -> &mut MenuScrollbarState {
         &mut self.bar
@@ -1822,6 +1916,36 @@ impl Render for TerminalPanel {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[gpui::test]
+    fn ime_commit_reaches_the_pty(cx: &mut gpui::TestAppContext) {
+        use gpui::{AppContext, EntityInputHandler};
+
+        cx.update(|cx| {
+            gpui_base::init(cx);
+            cx.set_global(Theme::default());
+        });
+        let (panel, cx) = cx.add_window_view(|_, cx| {
+            let state = cx.new(|_| {
+                let mut state = AppState::new();
+                state.selected_chat = Some("chat".into());
+                state
+            });
+            let mut panel = TerminalPanel::new(state, cx);
+            panel.reserve_tab_for_chat("chat".into(), "First", cx);
+            panel
+        });
+        panel.update_in(cx, |panel, window, cx| {
+            panel.replace_and_mark_text_in_range(None, "vie", None, window, cx);
+            assert_eq!(panel.marked_text_range(window, cx), Some(0..3));
+            panel.replace_text_in_range(None, "việt", window, cx);
+            assert_eq!(panel.marked_text_range(window, cx), None);
+            let chat = panel.selected_chat(cx);
+            let tabs = panel.chats.get_mut(&chat).unwrap();
+            let active = tabs.active;
+            assert_eq!(tabs.tabs[active].coalescer.take(), "việt".as_bytes());
+        });
+    }
 
     #[gpui::test]
     fn slow_trackpad_scroll_accumulates_per_terminal(cx: &mut gpui::TestAppContext) {

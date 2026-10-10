@@ -2552,8 +2552,8 @@ impl Shell {
         }
         self.settings.last_space_id = Some(space_id.clone());
         self.state.update(cx, |s, cx| {
-            s.select_space(Some(space_id), cx);
             s.select_chat(None, cx);
+            s.select_space(Some(space_id), cx);
         });
         self.schedule_save(cx);
         cx.notify();

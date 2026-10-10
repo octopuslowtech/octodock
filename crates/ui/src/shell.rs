@@ -71,6 +71,7 @@ mod harness_updates;
 mod navigation_focus;
 #[cfg(test)]
 mod navigation_tests;
+mod open_in;
 mod project_icon;
 mod side_chats;
 mod sidebar_pins;
@@ -1986,6 +1987,7 @@ pub struct Shell {
     right_plus: popover::Popup<()>,
     /// Host-owned project Actions cached per (device, space).
     project_actions: crate::project_actions::ProjectActionsController,
+    open_targets: crate::open_targets::OpenTargetsController,
     /// Diff surfaces by id — each tab its own [`Changes`] viewer with its own
     /// scope/base pick and diff watch (multiple diff panels, user request).
     diffs: std::collections::HashMap<u64, Entity<Changes>>,
@@ -2459,6 +2461,7 @@ impl Shell {
             right_terminal: None,
             right_plus: popover::Popup::default(),
             project_actions: crate::project_actions::ProjectActionsController::default(),
+            open_targets: crate::open_targets::OpenTargetsController::default(),
             diffs: std::collections::HashMap::new(),
             files: std::collections::HashMap::new(),
             files_subs: std::collections::HashMap::new(),
@@ -12738,7 +12741,7 @@ impl Render for Shell {
             .on_action(cx.listener(|this, _: &FindInChat, window, cx| {
                 if matches!(this.route, Route::Chat) && !this.overlay_owns_keyboard(cx) {
                     this.transcript
-                        .update(cx, |transcript, cx| transcript.open_find(window, cx));
+                        .update(cx, |transcript, cx| transcript.toggle_find(window, cx));
                 }
             }))
             .on_action(cx.listener(|this, _: &OpenModelPicker, window, cx| {
@@ -15694,6 +15697,20 @@ mod exit_regressions {
                 shell.settings.space_filter = Some("one".into());
                 shell.open_new_session(Some("two".into()), cx);
                 assert_eq!(shell.state.read(cx).selected_space.as_deref(), Some("two"));
+
+                shell.state.update(cx, |state, cx| {
+                    state.select_space(Some("one".into()), cx);
+                    state.chats = vec![serde_json::from_value(serde_json::json!({
+                        "id": "open", "deviceId": "local", "spaceId": "one", "archived": false,
+                        "createdAt": Utc::now(),
+                    }))
+                    .unwrap()];
+                    state.select_chat(Some("open".into()), cx);
+                });
+                shell.land_in_space("two".into(), cx);
+                let state = shell.state.read(cx);
+                assert!(state.selected_chat.is_none());
+                assert_eq!(state.selected_space.as_deref(), Some("two"));
             })
             .unwrap();
     }

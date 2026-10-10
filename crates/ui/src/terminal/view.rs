@@ -383,6 +383,7 @@ pub struct TerminalPrepaint {
     /// measured the grid with.
     line_h: Pixels,
     cursor: Option<PaintQuad>,
+    preedit: Option<(PaintQuad, ShapedLine)>,
 }
 
 impl gpui::IntoElement for TerminalElement {
@@ -485,6 +486,7 @@ impl gpui::Element for TerminalElement {
                 cell_w,
                 line_h,
                 cursor: None,
+                preedit: None,
             };
         };
 
@@ -544,6 +546,42 @@ impl gpui::Element for TerminalElement {
             lines.push(shape_row(row, &theme, &mono, font_size, window));
         }
 
+        let preedit_text = self.panel.read(cx).ime_preedit().to_owned();
+        let preedit = snapshot
+            .cursor
+            .filter(|_| !preedit_text.is_empty())
+            .map(|c| {
+                let color = resolve_color(CellColor::Foreground, &theme);
+                let run = TextRun {
+                    len: preedit_text.len(),
+                    font: mono.clone(),
+                    color,
+                    background_color: None,
+                    underline: Some(gpui::UnderlineStyle {
+                        color: Some(color),
+                        thickness: px(1.0),
+                        wavy: false,
+                    }),
+                    strikethrough: None,
+                };
+                let line = window.text_system().shape_line(
+                    SharedString::from(preedit_text),
+                    font_size,
+                    &[run],
+                    None,
+                );
+                let at = point(
+                    origin.x + cell_w * c.col as f32,
+                    origin.y + line_h * c.row as f32,
+                );
+                (
+                    fill(
+                        Bounds::new(at, size(line.width, line_h)),
+                        resolve_color(CellColor::Background, &theme),
+                    ),
+                    line,
+                )
+            });
         let cursor = snapshot.cursor.map(|c| {
             let cursor_bounds = Bounds::new(
                 point(
@@ -567,6 +605,7 @@ impl gpui::Element for TerminalElement {
             cell_w,
             line_h,
             cursor,
+            preedit,
         }
     }
 
@@ -580,6 +619,12 @@ impl gpui::Element for TerminalElement {
         window: &mut Window,
         cx: &mut App,
     ) {
+        let focus = self.panel.read(cx).focus_handle();
+        window.handle_input(
+            &focus,
+            gpui::ElementInputHandler::new(bounds, self.panel.clone()),
+            cx,
+        );
         let line_h = prepaint.line_h;
         let origin = point(
             bounds.left() + px(TERM_PADDING),
@@ -608,6 +653,11 @@ impl gpui::Element for TerminalElement {
             }
             if let Some(cursor) = prepaint.cursor.take() {
                 window.paint_quad(cursor);
+            }
+            if let Some((quad, line)) = prepaint.preedit.take() {
+                let at = quad.bounds.origin;
+                window.paint_quad(quad);
+                let _ = line.paint(at, line_h, gpui::TextAlign::Left, None, window, cx);
             }
         });
     }

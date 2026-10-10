@@ -608,6 +608,7 @@ impl FilesSurface {
             ComposerInputEvent::MentionDismiss => this.close_search(cx),
             ComposerInputEvent::PastedImages(_)
             | ComposerInputEvent::PastedPaths(_)
+            | ComposerInputEvent::PastedPrompt { .. }
             | ComposerInputEvent::PastedText { .. }
             | ComposerInputEvent::OpenAttachment(_)
             | ComposerInputEvent::CursorMoved

@@ -439,6 +439,16 @@ pub fn stage_png_bytes(name: String, bytes: Vec<u8>) -> StagedAttachment {
     )
 }
 
+pub fn stage_upload_bytes(name: &str, bytes: Vec<u8>) -> StagedAttachment {
+    let name = zeron_proto::attachment_mentions::attachment_display_name(name);
+    match format_by_extension(Path::new(name)) {
+        Some(format) => {
+            StagedAttachment::from_image(name.to_string(), Image::from_bytes(format, bytes))
+        }
+        None => StagedAttachment::from_file(name, bytes),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Upload (state.ts uploadAttachment) + read-back (state.ts readAttachmentImage)
 // ---------------------------------------------------------------------------

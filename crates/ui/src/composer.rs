@@ -1782,6 +1782,11 @@ pub enum ComposerInputEvent {
     PastedImages(Vec<gpui::Image>),
     /// File paths pasted from the clipboard (a file manager "Copy").
     PastedPaths(Vec<PathBuf>),
+    PastedPrompt {
+        raw: String,
+        uploads: Vec<(Option<u32>, String)>,
+        devices: Vec<String>,
+    },
     PastedText {
         range: Range<usize>,
         revision: u64,
@@ -3464,6 +3469,20 @@ impl ComposerInput {
                 {
                     if value.get("text").and_then(|v| v.as_str()) == Some(text.as_str()) {
                         if let Some(raw) = value.get("zeronComposerV1").and_then(|v| v.as_str()) {
+                            let uploads: Vec<(Option<u32>, String)> =
+                                serde_json::from_value(value["zeronPromptUploads"].clone())
+                                    .unwrap_or_default();
+                            if !uploads.is_empty() {
+                                cx.emit(ComposerInputEvent::PastedPrompt {
+                                    raw: raw.to_owned(),
+                                    uploads,
+                                    devices: serde_json::from_value(
+                                        value["zeronPromptDevices"].clone(),
+                                    )
+                                    .unwrap_or_default(),
+                                });
+                                return;
+                            }
                             // Chip numbers belong to one draft: chips copied from
                             // another chat would name the wrong attachment, so
                             // they paste as their plain labels instead.
@@ -6255,6 +6274,11 @@ impl Composer {
                 );
             }
             ComposerInputEvent::PastedPaths(paths) => this.add_paths(paths.clone(), cx),
+            ComposerInputEvent::PastedPrompt {
+                raw,
+                uploads,
+                devices,
+            } => this.paste_prompt(raw.clone(), uploads.clone(), devices.clone(), cx),
             ComposerInputEvent::PastedText { range, revision } => {
                 this.resolve_pasted_references(range.clone(), *revision, cx);
             }
@@ -6742,6 +6766,94 @@ impl Composer {
         }
         self.attachments.entry(key).or_default().extend(staged);
         self.sync_attachment_chips(cx);
+        cx.notify();
+    }
+
+    fn paste_prompt(
+        &mut self,
+        raw: String,
+        uploads: Vec<(Option<u32>, String)>,
+        devices: Vec<String>,
+        cx: &mut Context<Self>,
+    ) {
+        let key = self.current_key.clone();
+        let Some(engine) = self.state.read(cx).engine().cloned() else {
+            self.adopt_pasted_prompt(key, &raw, Vec::new(), cx);
+            return;
+        };
+        let local = self.state.read(cx).local_device_id.clone();
+        cx.spawn(async move |this, cx| {
+            let executor = cx.background_executor().clone();
+            let mut fetched = Vec::new();
+            for (index, path) in uploads {
+                for device in &devices {
+                    let target =
+                        (local.as_deref() != Some(device.as_str())).then_some(device.as_str());
+                    if let Some((name, _, bytes)) =
+                        attachments::read_attachment_bytes(&engine, &executor, target, &path, None)
+                            .await
+                    {
+                        fetched.push((index, attachments::stage_upload_bytes(&name, bytes)));
+                        break;
+                    }
+                }
+            }
+            this.update(cx, |this, cx| {
+                this.adopt_pasted_prompt(key, &raw, fetched, cx)
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn adopt_pasted_prompt(
+        &mut self,
+        key: String,
+        raw: &str,
+        fetched: Vec<(Option<u32>, StagedAttachment)>,
+        cx: &mut Context<Self>,
+    ) {
+        if key != self.current_key || self.queue_edit_finishing {
+            return;
+        }
+        let text = self.input.read(cx).text().to_string();
+        let mut renumbered = HashMap::new();
+        let mut unnamed = Vec::new();
+        let mut staged = Vec::with_capacity(fetched.len());
+        for (source, mut att) in fetched {
+            let index = self.next_attachment_index(&key, &text);
+            if let Some(image) = att.image() {
+                att.name = attachments::ensure_extension(
+                    &zeron_proto::attachment_mentions::image_label(index),
+                    image.format,
+                );
+            }
+            match source {
+                Some(source) => {
+                    renumbered.insert(source, index);
+                }
+                None => unnamed.push(zeron_proto::attachment_mentions::attachment_mention_link(
+                    index,
+                    att.image().is_none().then_some(att.name.as_str()),
+                )),
+            }
+            att.mention = Some(index);
+            staged.push(att);
+        }
+        let mut pasted = vec![zeron_proto::attachment_mentions::renumber_mentions(
+            raw,
+            |index| renumbered.get(&index).copied(),
+        )];
+        pasted.extend(unnamed);
+        pasted.retain(|part| !part.is_empty());
+        let inserted = self.input.update(cx, |input, cx| {
+            input.insert_reference(&pasted.join(" "), cx)
+        });
+        if inserted {
+            self.attachments.entry(key).or_default().extend(staged);
+            self.sync_attachment_chips(cx);
+            self.focus_pending = true;
+        }
         cx.notify();
     }
 

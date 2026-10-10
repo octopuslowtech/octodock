@@ -703,10 +703,8 @@ impl Pickers {
             .iter()
             .filter(|g| Self::compact_option_visible(&g.id, &hidden))
             .count();
-        let effort = self.compact_effort(cx).is_some();
         let panel_height = CARD_BORDERS
-            + header_block(effort)
-            + if effort { EFFORT_BLOCK } else { 0.0 }
+            + header_block(false)
             + if options == 0 {
                 0.0
             } else {
@@ -835,9 +833,7 @@ impl Pickers {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let theme = Theme::of(cx).for_popup();
-        let (levels, selected) = self
-            .compact_effort(cx)
-            .map_or((Vec::new(), 0), |e| (e.labels, e.selected));
+        let (levels, selected): (Vec<SharedString>, usize) = Default::default();
         let name = self.model_name(cx);
         let label = Self::compact_title_text(&name);
         let name_element: AnyElement = if name == ModelName::Loading {

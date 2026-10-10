@@ -181,24 +181,38 @@ pub fn attachment_mention_indices(text: &str) -> Vec<u32> {
 /// Replace chips with their plain label. Providers read prose, and the label
 /// pairs with the attached upload.
 pub fn attachment_mention_prompt(text: &str) -> String {
-    replace_mentions(text, |_| true)
+    replace_mentions(text, |mention| Some(mention.label.clone()))
 }
 
 /// Replace chips whose attachment is not attached by plain text, so a dangling
 /// reference never leaves the composer as a link.
 pub fn demote_unattached_mentions(text: &str, attached: &[u32]) -> String {
-    replace_mentions(text, |index| !attached.contains(&index))
+    replace_mentions(text, |mention| {
+        (!attached.contains(&mention.index)).then(|| mention.label.clone())
+    })
 }
 
-fn replace_mentions(text: &str, replace: impl Fn(u32) -> bool) -> String {
+pub fn renumber_mentions(text: &str, index: impl Fn(u32) -> Option<u32>) -> String {
+    replace_mentions(text, |mention| {
+        Some(match index(mention.index) {
+            Some(index) => attachment_mention_link(
+                index,
+                (!mention.is_image).then_some(mention.label.as_str()),
+            ),
+            None => mention.label.clone(),
+        })
+    })
+}
+
+fn replace_mentions(text: &str, replace: impl Fn(&AttachmentMention) -> Option<String>) -> String {
     let mut out = String::new();
     let mut at = 0;
     for mention in attachment_mentions(text) {
-        if !replace(mention.index) {
+        let Some(replacement) = replace(&mention) else {
             continue;
-        }
+        };
         out.push_str(&text[at..mention.range.start]);
-        out.push_str(&mention.label);
+        out.push_str(&replacement);
         at = mention.range.end;
     }
     out.push_str(&text[at..]);
@@ -284,6 +298,24 @@ mod tests {
         assert_eq!(
             demote_unattached_mentions(&text, &[2]),
             format!("Image 1 and {}", attachment_mention_link(2, Some("a.md")))
+        );
+    }
+
+    #[test]
+    fn renumbered_mentions_keep_carried_chips_and_demote_the_rest() {
+        let text = format!(
+            "{} {} {}",
+            image(1),
+            attachment_mention_link(2, Some("a.md")),
+            image(3)
+        );
+        assert_eq!(
+            renumber_mentions(&text, |index| (index < 3).then_some(index + 4)),
+            format!(
+                "{} {} Image 3",
+                image(5),
+                attachment_mention_link(6, Some("a.md"))
+            )
         );
     }
 

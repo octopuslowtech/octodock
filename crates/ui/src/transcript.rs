@@ -1041,6 +1041,7 @@ pub enum RowKind {
         badges: Arc<Vec<crate::badges::MessageBadge>>,
         /// Optimistic echo not yet confirmed by a doc frame.
         pending: bool,
+        raw: SharedString,
     },
     /// One top-level markdown block of a completed message.
     Markdown {
@@ -1343,6 +1344,7 @@ pub fn rows_for_entry(
         // a click opening it.
         let chips = zeron_proto::attachment_mentions::attachment_mentions(&body);
         let mut attachments = parsed.attachments;
+        let raw_body = body.clone();
         let (text, mut mentions) = match crate::composer::sent_mention_display(&body) {
             Some((display, spans)) => (display, spans),
             None => (body, Vec::new()),
@@ -1365,7 +1367,11 @@ pub fn rows_for_entry(
                     .iter()
                     .any(|chip| crate::attachments::chip_names_attachment(chip, &att.path))
         });
-        let copy_text = (!text.trim().is_empty()).then(|| SharedString::from(text.clone()));
+        let copy_text = Some(zeron_proto::invocation::invocation_prompt(
+            &zeron_proto::file_mentions::file_mention_prompt(&raw_body),
+        ))
+        .filter(|plain| !plain.trim().is_empty())
+        .map(SharedString::from);
         return vec![Row {
             id: entry.id.clone().into(),
             version: (raw.len() as u64) << 1 | pending as u64,
@@ -1376,6 +1382,7 @@ pub fn rows_for_entry(
                 attachments: Arc::new(attachments),
                 badges: Arc::new(badges),
                 pending,
+                raw: raw_body.into(),
             },
             entry_id,
             // User rows always carry the strip (chat-view.tsx: whenever
@@ -4585,39 +4592,31 @@ impl Transcript {
         self.engage_pin(cx);
     }
 
-    pub(crate) fn open_find(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn toggle_find(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.find.is_some() {
+            self.close_find(window, cx);
+            return;
+        }
         if self.chat_id.is_none() {
             return;
         }
-        let existing = self.find.as_ref().map(|find| find.input.clone());
-        let input = match existing {
-            Some(input) => input,
-            None => {
-                let input = cx.new(|cx| {
-                    crate::composer::ComposerInput::with_context(
-                        "Find in chat",
-                        "PaletteSearch",
-                        cx,
-                    )
-                    .with_text_metrics(12.0, 16.0)
-                    .with_single_line()
-                });
-                let events = cx.subscribe(&input, |this: &mut Self, _, event, cx| {
-                    if matches!(event, crate::composer::ComposerInputEvent::Edited) {
-                        this.find_query_changed(cx);
-                    }
-                });
-                self.find = Some(TranscriptFind {
-                    input: input.clone(),
-                    matches: Vec::new(),
-                    current: 0,
-                    return_focus: window.focused(cx),
-                    _events: events,
-                });
-                input
+        let input = cx.new(|cx| {
+            crate::composer::ComposerInput::with_context("Find in chat", "PaletteSearch", cx)
+                .with_text_metrics(12.0, 16.0)
+                .with_single_line()
+        });
+        let events = cx.subscribe(&input, |this: &mut Self, _, event, cx| {
+            if matches!(event, crate::composer::ComposerInputEvent::Edited) {
+                this.find_query_changed(cx);
             }
-        };
-        input.update(cx, |input, cx| input.select_all_text(cx));
+        });
+        self.find = Some(TranscriptFind {
+            input: input.clone(),
+            matches: Vec::new(),
+            current: 0,
+            return_focus: window.focused(cx),
+            _events: events,
+        });
         let focus = gpui::Focusable::focus_handle(input.read(cx), cx);
         window.on_next_frame(move |window, cx| {
             window.focus(&focus, cx);
@@ -7549,6 +7548,7 @@ impl Transcript {
                 attachments,
                 badges,
                 pending,
+                ..
             } => {
                 let attachments = attachments.clone();
                 let badges = badges.clone();
@@ -7867,11 +7867,11 @@ impl Transcript {
         let entry_id = row.entry_id.clone();
         let find_tint = self.find.as_ref().and_then(|find| {
             let position = find.matches.binary_search(&ix).ok()?;
-            Some(if position == find.current {
-                theme.accent_wash
+            if position == find.current {
+                Some(theme.accent_wash)
             } else {
-                theme.ink(0.05)
-            })
+                matches!(row.kind, RowKind::ToolGroup { .. }).then(|| theme.ink(0.05))
+            }
         });
         let row_id = row.id.clone();
         let outer = div()
@@ -7994,7 +7994,29 @@ impl Transcript {
 
     fn copy_message(&mut self, entry_id: SharedString, text: SharedString, cx: &mut Context<Self>) {
         cx.stop_propagation();
-        cx.write_to_clipboard(ClipboardItem::new_string(text.to_string()));
+        let prompt = self.rows.iter().find_map(|row| match &row.kind {
+            RowKind::User {
+                raw,
+                mentions,
+                attachments,
+                ..
+            } if row.entry_id == entry_id => {
+                Some((raw.clone(), prompt_uploads(mentions, attachments)))
+            }
+            _ => None,
+        });
+        cx.write_to_clipboard(match prompt {
+            Some((raw, uploads)) => ClipboardItem::new_string_with_json_metadata(
+                text.to_string(),
+                serde_json::json!({
+                    "zeronComposerV1": raw.to_string(),
+                    "text": text.to_string(),
+                    "zeronPromptUploads": uploads,
+                    "zeronPromptDevices": self.attachment_device_ids(cx),
+                }),
+            ),
+            None => ClipboardItem::new_string(text.to_string()),
+        });
         self.copied_message = Some(entry_id);
         self.copied_message_clear = Some(cx.spawn(async move |this, cx| {
             cx.background_executor()
@@ -8858,6 +8880,27 @@ impl Transcript {
             })
             .into_any_element()
     }
+}
+
+fn prompt_uploads(
+    mentions: &[crate::composer::SentMentionSpan],
+    attachments: &[crate::attachments::UserImageAttachment],
+) -> Vec<(Option<u32>, String)> {
+    let mut uploads: Vec<(Option<u32>, String)> = Vec::new();
+    for span in mentions {
+        if let (Some(index), Some(path)) = (span.attachment, &span.upload)
+            && !uploads.iter().any(|(seen, _)| *seen == Some(index))
+        {
+            uploads.push((Some(index), path.to_string()));
+        }
+    }
+    uploads.extend(
+        attachments
+            .iter()
+            .filter(|att| att.appshot.is_none())
+            .map(|att| (None, att.path.clone())),
+    );
+    uploads
 }
 
 /// A sent message's text with its file-mention chips. The same recipe as the
@@ -10568,6 +10611,13 @@ impl Render for Transcript {
             ))
             .child(content)
             .child(rail);
+        render::set_find_wash(
+            cx.entity_id().as_u64(),
+            self.find.as_ref().and_then(|find| {
+                let query = find.input.read(cx).text().trim().to_lowercase();
+                (!query.is_empty()).then(|| (query.into(), Theme::of(cx).warning.opacity(0.35)))
+            }),
+        );
         let root = root.children(self.render_image_menu(cx));
         let root = root.children(self.render_find_bar(cx));
         // Full-size viewer for a clicked user-bubble thumbnail
@@ -11726,6 +11776,7 @@ mod tests {
             attachments: Arc::default(),
             badges: Arc::default(),
             pending: false,
+            raw: "Fix the Parser".into(),
         };
         let tree = Arc::new(parse_full("Nothing here.\n\n```rust\nlet parser = 1;\n```"));
         let mut prose = viewport_row("prose", "entry-b");
@@ -15355,6 +15406,41 @@ mod tests {
         assert_eq!(text.as_ref(), "");
         assert!(rows[0].copy_text.is_none());
         assert_eq!(attachments.len(), 1);
+    }
+
+    #[test]
+    fn copied_prompts_carry_plain_labels_and_their_uploads() {
+        let link = zeron_proto::attachment_mentions::attachment_mention_link(1, None);
+        let content = crate::attachments::with_attachments(
+            &format!("fix {link} now"),
+            &[
+                "/uploads/ab12cd34-Image_1.png".to_string(),
+                "/uploads/ef56ab78-loose.png".to_string(),
+            ],
+        );
+        let mut entry = assistant("u9", MessageStatus::Complete, vec![]);
+        entry.role = MessageRole::User;
+        entry.status = None;
+        entry.parts = vec![text_part("t0", &content)];
+        let rows = rows_for_entry(&entry, false, false, &mut parse);
+        let RowKind::User {
+            raw,
+            mentions,
+            attachments,
+            ..
+        } = &rows[0].kind
+        else {
+            panic!("expected a user row");
+        };
+        assert_eq!(rows[0].copy_text.as_deref(), Some("fix Image 1 now"));
+        assert_eq!(raw.as_ref(), format!("fix {link} now"));
+        assert_eq!(
+            prompt_uploads(mentions, attachments),
+            [
+                (Some(1), "/uploads/ab12cd34-Image_1.png".to_string()),
+                (None, "/uploads/ef56ab78-loose.png".to_string()),
+            ]
+        );
     }
 
     /// A sent bubble shapes each chip's padding in Geist and its label, like

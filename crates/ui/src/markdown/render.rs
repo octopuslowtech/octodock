@@ -1224,6 +1224,7 @@ pub(super) fn flat_text_presented_element(
         .map(|original| original.offsets.clone());
     let wash = inline_code_wash(theme);
     let sel_wash = selection_wash(theme);
+    let shown_text = flat.text.clone();
     let underlay = canvas(
         |bounds, window, _| window.insert_hitbox(bounds, gpui::HitboxBehavior::Normal),
         move |_, hitbox, window, _| {
@@ -1240,6 +1241,7 @@ pub(super) fn flat_text_presented_element(
                     ));
                 }
             }
+            paint_find_matches(window, surface, &shown_text, &layout);
             if let Some(range) = super::selection::wash_range(surface, &sel_key) {
                 let range = offsets
                     .as_ref()
@@ -1372,6 +1374,7 @@ fn paint_text_selection_with_wash(
     wash: Hsla,
 ) {
     let surface = PAINTING_SURFACE.with(Cell::get);
+    paint_find_matches(window, surface, text, layout);
     if let Some(range) = super::selection::wash_range(surface, key) {
         for rect in range_rects(layout, &range, 0.0, 0.0) {
             window.paint_quad(quad(
@@ -1718,6 +1721,71 @@ fn register_selection_listeners(
                 _cx.write_to_primary(gpui::ClipboardItem::new_string(_text));
             }
         });
+    }
+}
+
+thread_local! {
+    static FIND_WASHES: RefCell<HashMap<u64, (SharedString, Hsla)>> = RefCell::new(HashMap::new());
+}
+
+pub(crate) fn set_find_wash(surface: u64, find: Option<(SharedString, Hsla)>) {
+    FIND_WASHES.with(|washes| {
+        let mut washes = washes.borrow_mut();
+        match find {
+            Some(find) => washes.insert(surface, find),
+            None => washes.remove(&surface),
+        };
+    });
+}
+
+fn find_match_len(text: &str, query: &str) -> Option<usize> {
+    let mut wanted = query.chars();
+    let mut pending = wanted.next()?;
+    for (ix, ch) in text.char_indices() {
+        for lower in ch.to_lowercase() {
+            if lower != pending {
+                return None;
+            }
+            match wanted.next() {
+                Some(next) => pending = next,
+                None => return Some(ix + ch.len_utf8()),
+            }
+        }
+    }
+    None
+}
+
+pub(crate) fn find_ranges(text: &str, query: &str) -> Vec<Range<usize>> {
+    let mut ranges = Vec::new();
+    let mut from = 0;
+    while let Some(ch) = text[from..].chars().next() {
+        match find_match_len(&text[from..], query) {
+            Some(len) => {
+                ranges.push(from..from + len);
+                from += len;
+            }
+            None => from += ch.len_utf8(),
+        }
+    }
+    ranges
+}
+
+fn paint_find_matches(window: &mut Window, surface: u64, text: &str, layout: &gpui::TextLayout) {
+    let Some((query, wash)) = FIND_WASHES.with(|washes| washes.borrow().get(&surface).cloned())
+    else {
+        return;
+    };
+    for range in find_ranges(text, &query) {
+        for rect in range_rects(layout, &range, 0.0, 0.0) {
+            window.paint_quad(quad(
+                rect,
+                px(2.0),
+                wash,
+                px(0.0),
+                gpui::transparent_black(),
+                BorderStyle::default(),
+            ));
+        }
     }
 }
 
@@ -2613,6 +2681,16 @@ mod tests {
     use super::*;
     use crate::markdown::parser::{InlineStyle, parse_full};
     use gpui::TestAppContext;
+
+    #[test]
+    fn find_ranges_match_case_insensitively_on_original_byte_offsets() {
+        assert_eq!(find_ranges("Parser and PARSER", "parser"), vec![0..6, 11..17]);
+        assert_eq!(
+            find_ranges("Đọc TỆP", "tệp"),
+            vec!["Đọc ".len().."Đọc TỆP".len()]
+        );
+        assert!(find_ranges("parse", "parser").is_empty());
+    }
 
     #[derive(Default)]
     struct CodeSelectionHarness {

@@ -547,6 +547,39 @@ fn chips_copied_from_another_draft_paste_as_plain_labels(cx: &mut gpui::TestAppC
     assert_eq!(text(&handle, cx), attachment_mention_link(1, None));
 }
 
+#[gpui::test]
+fn prompts_copied_from_a_transcript_paste_with_their_images(cx: &mut gpui::TestAppContext) {
+    let (_dir, handle) = composer_focus_window(cx);
+    paste_images(&handle, cx, 1);
+    handle
+        .update(cx, |composer, _, cx| {
+            let key = composer.current_key.clone();
+            let raw = format!(
+                "fail {} ok {}",
+                attachment_mention_link(1, None),
+                attachment_mention_link(4, None)
+            );
+            let image = crate::attachments::stage_upload_bytes("ab12cd34-Image_1.png", Vec::new());
+            let loose = crate::attachments::stage_upload_bytes("ef56ab78-loose.png", Vec::new());
+            composer.adopt_pasted_prompt(key, &raw, vec![(Some(1), image), (None, loose)], cx);
+        })
+        .unwrap();
+    cx.run_until_parked();
+    assert!(
+        text(&handle, cx).contains(&format!(
+            "fail {} ok Image 4 {}",
+            attachment_mention_link(2, None),
+            attachment_mention_link(3, None)
+        )),
+        "{}",
+        text(&handle, cx)
+    );
+    assert_eq!(
+        staged_names(&handle, cx),
+        ["Image 1.png", "Image 2.png", "Image 3.png"]
+    );
+}
+
 #[test]
 fn sent_messages_project_image_chips_for_the_transcript() {
     let raw = format!("look at {} please", attachment_mention_link(2, None));
