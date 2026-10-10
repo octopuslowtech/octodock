@@ -73,13 +73,19 @@ pub(crate) fn meter(fraction: f32, theme: &Theme) -> gpui::Div {
         })
 }
 
-pub fn short_label(label: &str) -> &str {
-    match label {
-        "Session" => "5h",
-        "Week" => "wk",
-        "Month" => "mo",
-        other => other,
-    }
+pub fn countdown(
+    resets_at: Option<chrono::DateTime<chrono::Utc>>,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Option<String> {
+    let minutes = resets_at?.signed_duration_since(now).num_minutes().max(0);
+    let (days, hours, mins) = (minutes / 1440, minutes / 60 % 24, minutes % 60);
+    Some(if days > 0 {
+        format!("{days}d {hours}h")
+    } else if hours > 0 {
+        format!("{hours}h {mins}m")
+    } else {
+        format!("{mins}m")
+    })
 }
 
 pub struct SidebarUsage {
@@ -124,43 +130,46 @@ impl SidebarUsage {
     }
 }
 
-fn render_window(window: &AgentUsageWindow, first: bool, theme: &Theme) -> [AnyElement; 2] {
+fn render_window(
+    window: &AgentUsageWindow,
+    now: chrono::DateTime<chrono::Utc>,
+    theme: &Theme,
+) -> AnyElement {
     let fraction = window.used_fraction.clamp(0.0, 1.0);
-    let level = usage_level(fraction);
-    [
-        meter(fraction, theme)
-            .flex_1()
-            .min_w(px(12.0))
-            .ml(px(if first { 6.0 } else { 8.0 }))
-            .mr(px(6.0))
-            .into_any_element(),
-        div()
-            .flex_none()
-            .flex()
-            .flex_row()
-            .gap(px(3.0))
-            .child(
-                div()
-                    .text_color(usage_color(level, theme))
-                    .child(SharedString::from(format!(
-                        "{}%",
-                        (fraction * 100.0).round() as u32
-                    ))),
-            )
-            .child(
-                div()
-                    .text_color(theme.text_muted)
-                    .child(SharedString::from(short_label(&window.label).to_string())),
-            )
-            .into_any_element(),
-    ]
+    let rest = match countdown(window.resets_at, now) {
+        Some(left) => format!("used {left}"),
+        None => "used".to_string(),
+    };
+    div()
+        .flex_none()
+        .flex()
+        .flex_row()
+        .gap(px(4.0))
+        .child(
+            div()
+                .w(crate::typography::ui_rems(28.0))
+                .flex()
+                .justify_end()
+                .text_color(usage_color(usage_level(fraction), theme))
+                .child(SharedString::from(format!(
+                    "{}%",
+                    (fraction * 100.0).round() as u32
+                ))),
+        )
+        .child(
+            div()
+                .w(crate::typography::ui_rems(74.0))
+                .text_color(theme.text_muted)
+                .child(SharedString::from(rest)),
+        )
+        .into_any_element()
 }
 
 impl Render for SidebarUsage {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = Theme::of(cx).clone();
         let now = chrono::Utc::now();
-        let mut items: Vec<AnyElement> = Vec::new();
+        let mut rows: Vec<AnyElement> = Vec::new();
         let mut resets: Vec<String> = Vec::new();
         let snapshot = cx
             .try_global::<AccountsSnapshotCache>()
@@ -173,16 +182,23 @@ impl Render for SidebarUsage {
                 continue;
             };
             let (mark, tint) = crate::pickers::harness_brand_icon(harness);
-            items.push(
-                icon(mark)
-                    .size(px(12.0))
-                    .flex_none()
-                    .when(!items.is_empty(), |el| el.ml(px(12.0)))
-                    .text_color(tint.unwrap_or(theme.text_muted))
-                    .into_any_element(),
-            );
-            for (ix, window) in account.usage_windows.iter().take(2).enumerate() {
-                items.extend(render_window(window, ix == 0, &theme));
+            let mut windows: Vec<AnyElement> = Vec::new();
+            for window in account.usage_windows.iter().take(2) {
+                windows.push(
+                    div()
+                        .h(px(18.0))
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .gap(px(6.0))
+                        .child(
+                            meter(window.used_fraction.clamp(0.0, 1.0), &theme)
+                                .flex_1()
+                                .min_w(px(12.0)),
+                        )
+                        .child(render_window(window, now, &theme))
+                        .into_any_element(),
+                );
                 resets.push(match format_reset(window.resets_at, now) {
                     Some(reset) => {
                         format!("{} {}: {reset}", provider_name(harness), window.label)
@@ -190,18 +206,32 @@ impl Render for SidebarUsage {
                     None => format!("{} {}", provider_name(harness), window.label),
                 });
             }
+            rows.push(
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap(px(8.0))
+                    .child(
+                        icon(mark)
+                            .size(px(14.0))
+                            .flex_none()
+                            .text_color(tint.unwrap_or(theme.text_muted)),
+                    )
+                    .child(div().flex_1().min_w_0().flex().flex_col().children(windows))
+                    .into_any_element(),
+            );
         }
-        if items.is_empty() {
+        if rows.is_empty() {
             return div().into_any_element();
         }
         div()
             .id("sidebar-usage-line")
-            .h(px(24.0))
+            .py(px(3.0))
             .px(px(Theme::SPACE_SM))
             .rounded(px(8.0))
             .flex()
-            .flex_row()
-            .items_center()
+            .flex_col()
             .overflow_hidden()
             .cursor_pointer()
             .text_size(crate::typography::ui_rems(11.0))
@@ -209,7 +239,7 @@ impl Render for SidebarUsage {
             .tooltip(crate::settings::widgets::text_tooltip_above(
                 resets.join(" · "),
             ))
-            .children(items)
+            .children(rows)
             .into_any_element()
     }
 }
@@ -219,10 +249,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn window_labels_shorten_and_pass_unknown_through() {
-        assert_eq!(short_label("Session"), "5h");
-        assert_eq!(short_label("Week"), "wk");
-        assert_eq!(short_label("Month"), "mo");
-        assert_eq!(short_label("Opus"), "Opus");
+    fn countdown_shows_the_two_largest_units() {
+        let now = chrono::Utc::now();
+        let after = |minutes| Some(now + chrono::Duration::minutes(minutes));
+        assert_eq!(countdown(after(299), now).as_deref(), Some("4h 59m"));
+        assert_eq!(
+            countdown(after(5 * 1440 + 6 * 60), now).as_deref(),
+            Some("5d 6h")
+        );
+        assert_eq!(countdown(after(42), now).as_deref(), Some("42m"));
+        assert_eq!(countdown(after(-5), now).as_deref(), Some("0m"));
+        assert_eq!(countdown(None, now), None);
     }
 }
