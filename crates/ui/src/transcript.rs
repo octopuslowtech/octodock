@@ -34,9 +34,9 @@ use std::time::{Duration, Instant};
 
 use gpui::{
     AnyElement, Bounds, ClipboardItem, ContentMask, Context, Entity, ListAlignment, ListOffset,
-    ListScrollEvent, ListState, MouseButton, MouseMoveEvent, MouseUpEvent, ObjectFit, PathBuilder,
-    Pixels, Point, SharedString, StyledImage as _, StyledText, Subscription, Task, TextAlign,
-    TextRun, Window, canvas, div, img, list, point, prelude::*, px, size,
+    ListScrollEvent, ListState, MouseButton, MouseMoveEvent, MouseUpEvent, ObjectFit, Pixels,
+    Point, SharedString, StyledImage as _, StyledText, Subscription, Task, TextAlign, TextRun,
+    Window, canvas, div, img, list, point, prelude::*, px, size,
 };
 
 use zeron_doc::{MessagePart, MessageRole, MessageStatus, SessionMessageEntry, SubagentStatus};
@@ -97,22 +97,11 @@ pub const CHIP_CARD_HEIGHT: f32 = 30.0;
 /// header inside a 30px bordered card clips 2px off the bottom and every
 /// glyph/icon reads high (user report).
 const CHIP_HEADER_HEIGHT: f32 = CHIP_CARD_HEIGHT - 2.0;
-/// Child labels and expanded text share one edge beneath the compact summary.
-/// The child gutter reserves room for
-/// a longer elbow, a 4px break before the icon, and an 8px icon-to-text gap.
-const ACTIVITY_GUTTER_WIDTH: f32 = 48.0;
-const ACTIVITY_TEXT_GAP: f32 = 8.0;
 const ACTIVITY_TRUNK_X: f32 = 12.5;
-const ACTIVITY_BEND_RADIUS: f32 = 6.0;
-const ACTIVITY_BRANCH_END_X: f32 = 28.0;
-const ACTIVITY_ICON_LEFT: f32 = 32.0;
-const ACTIVITY_ICON_SIZE: f32 = 16.0;
 const TOOL_TEXT_SIZE: f32 = 12.0;
 const TOOL_LABEL_SIZE: f32 = TOOL_TEXT_SIZE;
 const TOOL_LABEL_LINE_HEIGHT: f32 = 18.0;
 const TOOL_GROUP_HEADER_HEIGHT: f32 = 26.0;
-/// Compact rows retain the analytic heights used by row and group folds.
-const TOOL_TREE_ROW_HEIGHT: f32 = 32.0;
 const TOOL_FOLD: motion::MotionSpec = motion::MotionSpec::new(140, motion::EASE_OUT);
 /// BoardUI task-list cadence: a slow light sweep keeps the active summary
 /// legible, while each newly appended row reveals quickly enough to read as a
@@ -2781,53 +2770,6 @@ fn tool_connector_parts(progress: f32, has_predecessor: bool) -> (f32, f32) {
     let incoming = ((progress - incoming_start) / (incoming_end - incoming_start)).clamp(0.0, 1.0);
     let branch = ((progress - branch_start) / (1.0 - branch_start)).clamp(0.0, 1.0);
     (incoming, branch)
-}
-
-/// The outgoing trunk belongs visually to the row that is already present,
-/// but its timing belongs to the next row's arrival.
-fn tool_connector_continuation(next_progress: Option<f32>) -> f32 {
-    next_progress
-        .map(|progress| (progress / 0.45).clamp(0.0, 1.0))
-        .unwrap_or(0.0)
-}
-
-/// Reveal by distance along the elbow and straight leg, so changing the branch
-/// length does not introduce a speed jump at their junction.
-fn activity_branch_points(progress: f32) -> Vec<Point<f32>> {
-    let mut path: Vec<_> = (0..=24)
-        .map(|step| {
-            let t = step as f32 / 24.0;
-            point(
-                ACTIVITY_BEND_RADIUS * t * t,
-                ACTIVITY_BEND_RADIUS * (2.0 * t - t * t),
-            )
-        })
-        .collect();
-    path.push(point(
-        ACTIVITY_BRANCH_END_X - ACTIVITY_TRUNK_X,
-        ACTIVITY_BEND_RADIUS,
-    ));
-    if progress >= 1.0 {
-        return path;
-    }
-    let lengths: Vec<_> = path
-        .windows(2)
-        .map(|pair| (pair[1].x - pair[0].x).hypot(pair[1].y - pair[0].y))
-        .collect();
-    let mut remaining = lengths.iter().sum::<f32>() * progress.clamp(0.0, 1.0);
-    let mut visible = vec![path[0]];
-    for (pair, length) in path.windows(2).zip(lengths) {
-        if remaining <= 0.0 {
-            break;
-        }
-        let t = (remaining / length).min(1.0);
-        visible.push(point(
-            motion::lerp(pair[0].x, pair[1].x, t),
-            motion::lerp(pair[0].y, pair[1].y, t),
-        ));
-        remaining -= length;
-    }
-    visible
 }
 
 fn tool_disclosure_progress(open: bool, fold: FoldState, now: Instant) -> f32 {
@@ -6292,7 +6234,6 @@ impl Transcript {
         &self,
         chip: &SharedString,
         images: Vec<(String, crate::tool_images::Thumb)>,
-        collapses: bool,
         theme: &Theme,
         cx: &mut Context<Self>,
     ) -> AnyElement {
@@ -6367,14 +6308,14 @@ impl Transcript {
                 div()
                     .h(px(DETAIL_SEPARATOR))
                     .flex_none()
-                    .when(!collapses, |line| line.bg(crate::theme::hairline(0.06))),
+                    .bg(crate::theme::hairline(0.06)),
             )
             .child(
                 div()
                     .id(SharedString::from(format!("{chip}-images")))
                     .h(px(TOOL_IMAGE_HEIGHT + 2.0 * TOOL_IMAGE_PAD))
                     .py(px(TOOL_IMAGE_PAD))
-                    .when(!collapses, |strip| strip.px(px(TOOL_IMAGE_PAD)))
+                    .px(px(TOOL_IMAGE_PAD))
                     .flex()
                     .flex_row()
                     .gap(px(TOOL_IMAGE_PAD))
@@ -8395,11 +8336,7 @@ impl Transcript {
                     .and_then(|detail| self.tool_diff_highlight_for(row_id, ix, detail, cx))
             })
             .collect();
-        let base_row_height = if collapses {
-            TOOL_TREE_ROW_HEIGHT
-        } else {
-            CHIP_HEIGHT
-        };
+        let base_row_height = CHIP_HEIGHT;
         let mut motion_active = false;
         let row_heights: Vec<f32> = details
             .iter()
@@ -8612,8 +8549,6 @@ impl Transcript {
                 let reveal = reveal_progress[ix];
                 let connector_reveal = connector_progress[ix];
                 let content_reveal = tool_connector_parts(connector_reveal, ix > 0).1;
-                let continuation_reveal =
-                    tool_connector_continuation(connector_progress.get(ix + 1).copied());
                 let row_height = row_heights[ix];
                 // Spawn chips are LINKS, not accordions: the click opens the
                 // subagent's transcript as a right-pane tab (the shell hosts
@@ -8636,7 +8571,6 @@ impl Transcript {
                                 frozen,
                             });
                         }),
-                        collapses,
                         theme,
                         cx.entity_id(),
                         cx,
@@ -8648,12 +8582,7 @@ impl Transcript {
                     return reveal_tool_row(
                         tool_chip(
                             tool,
-                            collapses,
-                            ix > 0,
-                            ix + 1 < tools.len(),
                             content_reveal,
-                            connector_reveal,
-                            continuation_reveal,
                             file_opener.as_ref(),
                             theme,
                             cx.entity_id(),
@@ -8667,9 +8596,6 @@ impl Transcript {
                 let open = detail_opens[ix];
                 let dfold = detail_folds[ix];
                 let key = SharedString::from(format!("{row_id}#d{ix}"));
-                // Ordinary tools expand into muted text along the same column.
-                // Subagent fallbacks retain their card; explicit heights keep
-                // the row and group fold animations in sync.
                 let animating = dfold.epoch > 0
                     && dfold
                         .toggled_at
@@ -8677,26 +8603,19 @@ impl Transcript {
                 let toggle_key = key.clone();
                 let mut card = div()
                     .my(px((base_row_height - CHIP_CARD_HEIGHT) / 2.0))
-                    .when(collapses, |el| el.ml(px(ACTIVITY_TEXT_GAP)))
                     .min_w_0()
                     .flex_1()
                     .flex()
                     .flex_col()
                     .overflow_hidden()
-                    .when(!collapses, |card| {
-                        card.rounded(px(9.0))
-                            .border_1()
-                            .border_color(crate::theme::hairline(0.07))
-                            .bg(crate::theme::ink(0.03))
-                    })
+                    .rounded(px(9.0))
+                    .border_1()
+                    .border_color(crate::theme::hairline(0.07))
+                    .bg(crate::theme::ink(0.03))
                     .child(
                         div()
                             .id(key.clone())
-                            .h(px(if collapses {
-                                CHIP_CARD_HEIGHT
-                            } else {
-                                CHIP_HEADER_HEIGHT
-                            }))
+                            .h(px(CHIP_HEADER_HEIGHT))
                             .flex_none()
                             .flex()
                             .items_center()
@@ -8737,14 +8656,12 @@ impl Transcript {
                                 div()
                                     .h(px(DETAIL_SEPARATOR))
                                     .flex_none()
-                                    .when(!collapses, |line| line.bg(crate::theme::hairline(0.06))),
+                                    .bg(crate::theme::hairline(0.06)),
                             )
                             .child(detail_body(invocation, None, &format!("{key}-call"), theme));
                     }
                     if let Some(images) = chip_images[ix].clone() {
-                        panel = panel.child(
-                            self.render_tool_image_strip(&key, images, collapses, theme, cx),
-                        );
+                        panel = panel.child(self.render_tool_image_strip(&key, images, theme, cx));
                     }
                     if let Some(detail) = detail.as_deref() {
                         panel = panel
@@ -8752,7 +8669,7 @@ impl Transcript {
                                 div()
                                     .h(px(DETAIL_SEPARATOR))
                                     .flex_none()
-                                    .when(!collapses, |line| line.bg(crate::theme::hairline(0.06))),
+                                    .bg(crate::theme::hairline(0.06)),
                             )
                             .child(detail_body(
                                 detail,
@@ -8770,6 +8687,7 @@ impl Transcript {
                             .id(SharedString::from(format!("{key}-blob")))
                             .h(px(BLOB_AFFORDANCE_HEIGHT))
                             .flex_none()
+                            .px(px(10.0))
                             .flex()
                             .items_center()
                             .text_size(px(TOOL_TEXT_SIZE))
@@ -8795,19 +8713,7 @@ impl Transcript {
                     .flex_none()
                     .flex()
                     .flex_row()
-                    // Stretch the line alongside the expanded text.
-                    .when(collapses, |row| {
-                        row.child(activity_rail(
-                            tool,
-                            ix > 0,
-                            ix + 1 < tools.len(),
-                            connector_reveal,
-                            continuation_reveal,
-                            base_row_height,
-                            theme,
-                        ))
-                    })
-                    .child(card.when(collapses && content_reveal < 1.0, |card| {
+                    .child(card.when(content_reveal < 1.0, |card| {
                         card.relative()
                             .top(px(4.0 * (1.0 - content_reveal)))
                             .opacity(content_reveal)
@@ -9505,6 +9411,7 @@ fn detail_body(
             .into_any_element(),
         ToolDetail::Stats { stats } => body
             .py(px(6.0))
+            .px(px(10.0))
             .font_family(theme.font_mono.clone())
             .text_size(px(TOOL_TEXT_SIZE))
             .children(stats.iter().enumerate().map(|(stat_ix, stat)| {
@@ -9550,6 +9457,7 @@ fn detail_body(
             truncated_by,
         } => body
             .py(px(6.0))
+            .px(px(10.0))
             .font_family(theme.font_mono.clone())
             .text_size(px(TOOL_TEXT_SIZE))
             .children(lines.iter().enumerate().map(|(line_ix, line)| {
@@ -9578,6 +9486,7 @@ fn detail_body(
             truncated_by,
         } => body
             .py(px(6.0))
+            .px(px(10.0))
             .text_size(px(TOOL_TEXT_SIZE))
             .children(lines.iter().enumerate().map(|(line_ix, line)| {
                 let row = div()
@@ -9727,7 +9636,6 @@ fn chip_header_row(
         ToolItemKind::Note => ("Wrote", note_chip_detail(tool)),
         ToolItemKind::Call => tool_chip_content(&tool.call),
     };
-    let activity = !is_agent_tool(tool);
     let file_path = match &tool.call {
         ToolCall::ReadFile { path }
         | ToolCall::WriteFile { path, .. }
@@ -9744,78 +9652,67 @@ fn chip_header_row(
     let failed = tool.is_error
         || (tool.subagent_ref.is_some()
             && matches!(tool.subagent_status, Some(SubagentStatus::Failed)));
-    // Text resolves its color during layout, so group-hover text needs stable
-    // child IDs under the keyed, expandable header to retain hover state.
-    let hover_text = activity && trail.is_some() && !failed;
-    let tint = if failed {
+    let title_color = if failed {
         theme.danger
     } else {
-        theme.text_muted
+        theme.text.opacity(0.85)
     };
+    let label_is_title = detail.is_empty();
     div()
-        .group("tool-header")
-        .h(px(if activity {
-            CHIP_CARD_HEIGHT
-        } else {
-            CHIP_HEADER_HEIGHT
-        }))
+        .h(px(CHIP_HEADER_HEIGHT))
         .w_full()
         .min_w_0()
         .flex()
         .flex_row()
         .items_center()
         .gap(px(8.0))
-        .px(px(if activity { 0.0 } else { 8.0 }))
+        .px(px(8.0))
         .text_size(px(TOOL_LABEL_SIZE))
         .line_height(px(TOOL_LABEL_LINE_HEIGHT))
-        .when(!activity, |row| {
-            row.child(
-                // Subagent icon tile (`size-[18px] rounded-[5px] bg-white/[0.08]`,
-                // icon size-3).
-                div()
-                    .size(px(18.0))
-                    .flex_none()
-                    .rounded(px(5.0))
-                    .bg(crate::theme::ink(0.08))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .child(
-                        crate::icons::icon(match tool.kind {
-                            ToolItemKind::Thought => crate::icons::CHAT_ROUND_LINE,
-                            ToolItemKind::Note => crate::icons::PEN,
-                            ToolItemKind::Call => tool_icon_path(&tool.call),
-                        })
-                        .size(px(12.0))
-                        .text_color(theme.text_muted),
-                    ),
-            )
-        })
+        .child(
+            div()
+                .size(px(18.0))
+                .flex_none()
+                .rounded(px(5.0))
+                .bg(crate::theme::ink(0.08))
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(
+                    crate::icons::icon(match tool.kind {
+                        ToolItemKind::Thought => crate::icons::CHAT_ROUND_LINE,
+                        ToolItemKind::Note => crate::icons::PEN,
+                        ToolItemKind::Call => tool_icon_path(&tool.call),
+                    })
+                    .size(px(12.0))
+                    .text_color(if failed {
+                        theme.danger
+                    } else {
+                        theme.text_muted
+                    }),
+                ),
+        )
         .child(
             div()
                 .flex_none()
                 .h(px(TOOL_LABEL_LINE_HEIGHT))
                 .flex()
                 .items_center()
-                .when(!activity, |label| {
+                .when(label_is_title, |label| {
                     label.font_weight(gpui::FontWeight::MEDIUM)
                 })
-                .text_color(tint)
-                .child(SharedString::from(label))
-                .map(|label| {
-                    if hover_text {
-                        label
-                            .id("tool-label")
-                            .group_hover("tool-header", |style| style.text_color(theme.text))
-                            .into_any_element()
-                    } else {
-                        label.into_any_element()
-                    }
-                }),
+                .text_color(if label_is_title {
+                    title_color
+                } else if failed {
+                    theme.danger
+                } else {
+                    theme.text_muted
+                })
+                .child(SharedString::from(label)),
         )
         .child(
             div()
-                .when(!activity, |detail| detail.flex_1())
+                .flex_1()
                 .min_w_0()
                 .h(px(if file_path.is_some() {
                     22.0
@@ -9823,16 +9720,10 @@ fn chip_header_row(
                     TOOL_LABEL_LINE_HEIGHT
                 }))
                 .flex()
-                .when(activity && detail.is_empty(), |detail| detail.hidden())
                 .items_center()
                 .truncate()
-                .text_color(if failed {
-                    theme.danger
-                } else if activity {
-                    theme.text_muted
-                } else {
-                    theme.text.opacity(0.85)
-                })
+                .font_weight(gpui::FontWeight::MEDIUM)
+                .text_color(title_color)
                 .child(if let Some(path) = file_path {
                     let badge = div()
                         .min_w_0()
@@ -9845,11 +9736,6 @@ fn chip_header_row(
                         .bg(theme.ink(0.06))
                         .pl(px(1.0))
                         .pr(px(6.0))
-                        .text_color(if failed {
-                            theme.danger
-                        } else {
-                            theme.text.opacity(0.85)
-                        })
                         .child(
                             div()
                                 .size(px(20.0))
@@ -9874,30 +9760,17 @@ fn chip_header_row(
                                 .child(SharedString::from(file_badge_name(path).to_owned())),
                         )
                         .map(|badge| {
-                            if !hover_text && open_file.is_none() {
+                            let Some((path, opener)) = open_file else {
                                 return badge.into_any_element();
-                            }
+                            };
                             badge
                                 .id("tool-file-badge")
-                                .when(hover_text, |badge| {
-                                    badge.group_hover("tool-header", |style| {
-                                        style.text_color(theme.text)
-                                    })
-                                })
-                                // The badge is its own target: opening the
-                                // file must not also toggle the chip's
-                                // accordion underneath it.
-                                .when_some(open_file, |badge, (path, opener)| {
-                                    badge
-                                        .debug_selector(|| "tool-file-badge".into())
-                                        .cursor_pointer()
-                                        .hover(|style| {
-                                            style.bg(theme.ink(0.1)).text_color(theme.text)
-                                        })
-                                        .on_click(move |_, window, cx| {
-                                            cx.stop_propagation();
-                                            opener.open(&path, window, cx);
-                                        })
+                                .debug_selector(|| "tool-file-badge".into())
+                                .cursor_pointer()
+                                .hover(|style| style.bg(theme.ink(0.1)).text_color(theme.text))
+                                .on_click(move |_, window, cx| {
+                                    cx.stop_propagation();
+                                    opener.open(&path, window, cx);
                                 })
                                 .into_any_element()
                         });
@@ -9908,31 +9781,9 @@ fn chip_header_row(
                         .truncate()
                         .child(SharedString::from(detail))
                         .into_any_element()
-                })
-                .map(|detail| {
-                    if hover_text {
-                        detail
-                            .id("tool-detail")
-                            .group_hover("tool-header", |style| style.text_color(theme.text))
-                            .into_any_element()
-                    } else {
-                        detail.into_any_element()
-                    }
                 }),
         )
         .when_some(tool.call.subagent_model(), |row, model| {
-            // Which model the child runs on, when the spawn named one.
-            //
-            // In the trailing slot rather than suffixed onto the detail: the
-            // detail is the truncating slot, and the model is exactly what a
-            // reader scanning a fan-out of spawns wants left once the
-            // descriptions are cut.
-            //
-            // Bare faint text, NOT a filled pill: the tiles either side of it
-            // are AFFORDANCES (the spinner means running, the arrow opens the
-            // subagent), so giving a passive label the same chrome made the
-            // trailing edge read as three buttons — the loudest thing in the
-            // row was the one thing you cannot click.
             row.child(
                 div()
                     .flex_none()
@@ -9945,8 +9796,6 @@ fn chip_header_row(
             )
         })
         .when(running, |row| {
-            // The sidebar working-row spinner, in the chip's trailing slot —
-            // paint-local (fixed footprint), so it never moves the layout.
             row.child(div().flex_none().child(crate::loaders::mini_glyph_spinner(
                 format!(
                     "subagent-chip-{}",
@@ -9959,22 +9808,14 @@ fn chip_header_row(
             )))
         })
         .when_some(trail, |row, trail| {
-            // Trailing tile matching the group header's: a chevron for the
-            // output/diff accordion, or the open-arrow for spawn chips.
             let tile = div()
                 .size(px(18.0))
                 .flex_none()
-                .when(activity, |tile| {
-                    tile.opacity(0.0)
-                        .group_hover("tool-header", |style| style.opacity(1.0))
-                })
-                .when(!activity, |tile| {
-                    tile.rounded(px(5.0)).bg(crate::theme::ink(0.06))
-                })
+                .rounded(px(5.0))
+                .bg(crate::theme::ink(0.06))
                 .flex()
                 .items_center()
-                .justify_center()
-                .text_color(theme.text_muted.opacity(0.8));
+                .justify_center();
             row.child(match trail {
                 ChipTrail::Chevron { open } => tile.child(
                     crate::icons::icon(if open {
@@ -9983,12 +9824,7 @@ fn chip_header_row(
                         crate::icons::ALT_ARROW_RIGHT
                     })
                     .size(px(12.0))
-                    .text_color(theme.text_faint)
-                    .when(activity, |caret| {
-                        caret.group_hover("tool-header", |style| {
-                            style.text_color(if failed { theme.danger } else { theme.text })
-                        })
-                    }),
+                    .text_color(theme.text_faint),
                 ),
                 ChipTrail::OpenArrow => tile.child(
                     crate::icons::icon(crate::icons::ARROW_UP_RIGHT)
@@ -10095,162 +9931,34 @@ fn reveal_tool_row(row: AnyElement, height: f32, progress: f32) -> AnyElement {
         .into_any_element()
 }
 
-/// BoardUI-style task tree with Zeron's tool glyph restored at each branch tip.
-/// The previous row draws the first leg of a new arrival to its lower boundary;
-/// this row then continues down, rounds the elbow, and finally reveals the icon.
-/// One paint owns every segment in a row, avoiding alpha-darkened joints.
-fn activity_rail(
-    tool: &ToolItem,
-    has_predecessor: bool,
-    continues: bool,
-    reveal: f32,
-    continuation_reveal: f32,
-    row_height: f32,
-    theme: &Theme,
-) -> gpui::Div {
-    let color = theme.hairline(0.12);
-    let tint = if tool.is_error {
-        theme.danger
-    } else {
-        theme.text_muted
-    };
-    let (incoming_reveal, branch_reveal) = tool_connector_parts(reveal, has_predecessor);
-    div()
-        .relative()
-        .w(px(ACTIVITY_GUTTER_WIDTH))
-        .flex_none()
-        .child(
-            canvas(
-                move |_, _, _| (),
-                move |bounds, _, window, _| {
-                    let x = bounds.origin.x + px(ACTIVITY_TRUNK_X);
-                    let branch_y = bounds.origin.y + px(row_height / 2.0);
-                    let bend_y = branch_y - px(ACTIVITY_BEND_RADIUS);
-                    // Union the ribbons before painting. Stroke tessellation
-                    // blends intersections twice, even in a single path.
-                    let mut tree = PathBuilder::fill().with_style(gpui::PathStyle::Fill(
-                        gpui::FillOptions::default().with_fill_rule(gpui::FillRule::NonZero),
-                    ));
-                    if incoming_reveal > 0.0 {
-                        let mut bottom = point(
-                            x,
-                            bounds.origin.y
-                                + px((row_height / 2.0 - ACTIVITY_BEND_RADIUS) * incoming_reveal),
-                        );
-                        if incoming_reveal >= 1.0 && continues && continuation_reveal > 0.0 {
-                            let continuation_height = (f32::from(bounds.size.height)
-                                - (row_height / 2.0 - ACTIVITY_BEND_RADIUS))
-                                .max(0.0);
-                            bottom =
-                                point(x, bend_y + px(continuation_height * continuation_reveal));
-                        }
-                        activity_ribbon(&mut tree, &[point(x, bounds.origin.y), bottom]);
-                    }
-                    if branch_reveal > 0.0 {
-                        let points: Vec<_> = activity_branch_points(branch_reveal)
-                            .into_iter()
-                            .map(|p| point(x + px(p.x), bend_y + px(p.y)))
-                            .collect();
-                        activity_ribbon(&mut tree, &points);
-                    }
-                    if let Ok(path) = tree.build() {
-                        window.paint_path(path, color);
-                    }
-                },
-            )
-            .absolute()
-            .inset_0(),
-        )
-        .child(
-            crate::icons::icon(match tool.kind {
-                ToolItemKind::Thought => crate::icons::CHAT_ROUND_LINE,
-                ToolItemKind::Note => crate::icons::PEN,
-                ToolItemKind::Call => tool_icon_path(&tool.call),
-            })
-            .absolute()
-            .left(px(ACTIVITY_ICON_LEFT))
-            .top(px(row_height / 2.0 - ACTIVITY_ICON_SIZE / 2.0))
-            .size(px(ACTIVITY_ICON_SIZE))
-            .opacity(branch_reveal)
-            .text_color(tint),
-        )
-}
-
-/// A clockwise ribbon contour. Nonzero fill unions intersecting contours,
-/// preserving one alpha contribution at the fork on transparent surfaces.
-fn activity_ribbon(path: &mut PathBuilder, points: &[Point<Pixels>]) {
-    let mut left = Vec::with_capacity(points.len());
-    let mut right = Vec::with_capacity(points.len());
-    for (ix, p) in points.iter().enumerate() {
-        let a = points[ix.saturating_sub(1)];
-        let b = points[(ix + 1).min(points.len() - 1)];
-        let dx = f32::from(b.x - a.x);
-        let dy = f32::from(b.y - a.y);
-        let length = dx.hypot(dy).max(0.0001);
-        let normal = point(px(-dy / length * 0.5), px(dx / length * 0.5));
-        left.push(*p + normal);
-        right.push(*p - normal);
-    }
-    path.move_to(left[0]);
-    for p in left.iter().skip(1).chain(right.iter().rev()) {
-        path.line_to(*p);
-    }
-    path.close();
-}
-
-/// A plain activity row, or a card for a subagent without a linked document.
 fn tool_chip(
     tool: &ToolItem,
-    rail: bool,
-    has_predecessor: bool,
-    continues: bool,
     content_reveal: f32,
-    connector_reveal: f32,
-    continuation_reveal: f32,
     file_opener: Option<&ToolFileOpener>,
     theme: &Theme,
     view: gpui::EntityId,
     cx: &mut gpui::App,
 ) -> AnyElement {
-    let row_height = if rail {
-        TOOL_TREE_ROW_HEIGHT
-    } else {
-        CHIP_HEIGHT
-    };
     div()
-        .h(px(row_height))
+        .h(px(CHIP_HEIGHT))
         .w_full()
         .flex_none()
         .flex()
         .flex_row()
-        .when(rail, |row| {
-            row.child(activity_rail(
-                tool,
-                has_predecessor,
-                continues,
-                connector_reveal,
-                continuation_reveal,
-                row_height,
-                theme,
-            ))
-        })
         .child(
             div()
-                .when(rail, |el| el.ml(px(ACTIVITY_TEXT_GAP)))
-                .my(px((row_height - CHIP_CARD_HEIGHT) / 2.0))
+                .my(px((CHIP_HEIGHT - CHIP_CARD_HEIGHT) / 2.0))
                 .h(px(CHIP_CARD_HEIGHT))
                 .min_w_0()
                 .flex_1()
                 .flex()
                 .items_center()
                 .overflow_hidden()
-                .when(!rail, |card| {
-                    card.rounded(px(9.0))
-                        .border_1()
-                        .border_color(crate::theme::hairline(0.07))
-                        .bg(crate::theme::ink(0.03))
-                })
-                .when(rail && content_reveal < 1.0, |card| {
+                .rounded(px(9.0))
+                .border_1()
+                .border_color(crate::theme::hairline(0.07))
+                .bg(crate::theme::ink(0.03))
+                .when(content_reveal < 1.0, |card| {
                     card.relative()
                         .top(px(4.0 * (1.0 - content_reveal)))
                         .opacity(content_reveal)
@@ -10269,7 +9977,6 @@ fn subagent_chip(
     tool: &ToolItem,
     id: SharedString,
     on_open: impl Fn(&gpui::ClickEvent, &mut Window, &mut gpui::App) + 'static,
-    rail: bool,
     theme: &Theme,
     view: gpui::EntityId,
     cx: &mut gpui::App,
@@ -10281,20 +9988,9 @@ fn subagent_chip(
         .flex()
         .flex_row()
         .items_center()
-        .when(rail, |row| {
-            row.child(
-                div()
-                    .ml(px(12.0))
-                    .h_full()
-                    .w(px(1.0))
-                    .flex_none()
-                    .bg(crate::theme::ink(0.08)),
-            )
-        })
         .child(
             div()
                 .id(id)
-                .when(rail, |el| el.ml(px(12.0)))
                 .h(px(CHIP_CARD_HEIGHT))
                 .min_w_0()
                 .flex_1()
@@ -11426,39 +11122,6 @@ mod tests {
         };
         assert_eq!(tool_disclosure_progress(true, fold, now), 1.0);
         assert_eq!(tool_disclosure_progress(false, fold, now), 0.0);
-    }
-
-    #[test]
-    fn connector_intersection_is_tessellated_only_once() {
-        let mut path = PathBuilder::fill().with_style(gpui::PathStyle::Fill(
-            gpui::FillOptions::default().with_fill_rule(gpui::FillRule::NonZero),
-        ));
-        activity_ribbon(
-            &mut path,
-            &[point(px(0.0), px(0.0)), point(px(0.0), px(10.0))],
-        );
-        activity_ribbon(
-            &mut path,
-            &[point(px(-5.0), px(5.0)), point(px(5.0), px(5.0))],
-        );
-        let path = path.build().unwrap();
-        let area: f32 = path
-            .vertices
-            .chunks_exact(3)
-            .map(|triangle| {
-                let a = triangle[0].xy_position;
-                let b = triangle[1].xy_position;
-                let c = triangle[2].xy_position;
-                (f32::from(b.x - a.x) * f32::from(c.y - a.y)
-                    - f32::from(b.y - a.y) * f32::from(c.x - a.x))
-                .abs()
-                    / 2.0
-            })
-            .sum();
-        assert!(
-            (area - 19.0).abs() < 0.001,
-            "overlap must contribute once: {area}"
-        );
     }
 
     #[test]
@@ -16357,39 +16020,11 @@ mod tests {
 
         assert_eq!(tool_connector_parts(0.0, false), (0.0, 0.0));
         assert_eq!(tool_connector_parts(0.44, true), (0.0, 0.0));
-        assert_eq!(tool_connector_continuation(Some(0.0)), 0.0);
-        assert!(tool_connector_continuation(Some(0.3)) > 0.0);
-        assert_eq!(tool_connector_continuation(Some(0.45)), 1.0);
 
         let (incoming, branch) = tool_connector_parts(0.60, true);
         assert!(incoming > 0.0 && incoming < 1.0);
         assert_eq!(branch, 0.0);
         assert_eq!(tool_connector_parts(1.0, true), (1.0, 1.0));
-        assert_eq!(tool_connector_continuation(None), 0.0);
-    }
-
-    #[test]
-    fn tool_branch_reveal_tracks_distance_through_the_bend() {
-        let length = |points: &[Point<f32>]| -> f32 {
-            points
-                .windows(2)
-                .map(|p| (p[1].x - p[0].x).hypot(p[1].y - p[0].y))
-                .sum()
-        };
-        let full = activity_branch_points(1.0);
-        assert_eq!(activity_branch_points(0.0), vec![point(0.0, 0.0)]);
-        let end = full.last().unwrap();
-        assert!((end.x - (ACTIVITY_BRANCH_END_X - ACTIVITY_TRUNK_X)).abs() < 0.0001);
-        assert!((end.y - ACTIVITY_BEND_RADIUS).abs() < 0.0001);
-        for progress in [0.1, 0.25, 0.5, 0.75, 0.9] {
-            let partial = activity_branch_points(progress);
-            assert!((length(&partial) / length(&full) - progress).abs() < 0.0001);
-            assert!(
-                partial
-                    .windows(2)
-                    .all(|p| p[1].x >= p[0].x && p[1].y >= p[0].y)
-            );
-        }
     }
 
     #[test]

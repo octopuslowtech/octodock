@@ -17,6 +17,8 @@ use crate::constants::MSG_INLINE_MAX;
 /// summary, so 160 is generous.
 pub const TOOL_OUTPUT_SUMMARY_MAX: usize = 160;
 
+pub const MCP_INPUT_MAX: usize = 4 * 1024;
+
 /// The doc-resident form of a tool output (docs/chat2-sync.md A1; the R2
 /// sidecar is PARKED as of 2026-08-10, so this IS the whole record in the
 /// doc — the full text survives only in the host's local run journal):
@@ -562,9 +564,11 @@ pub fn sidecar_payload(event: &AgentEvent) -> Option<SidecarPayload> {
 /// Render-only privacy policy — strip heavy/sensitive tool inputs before a call enters the doc.
 ///
 /// Keeps: command / path / pattern / url / query / todo items / server+tool names,
-/// and a subagent spawn's model/type (see [`spawn_badge`] — a couple of short
-/// identifiers the chip names the child by).
-/// Drops: WriteFile content, EditFile old/new strings, WebFetch prompt, Mcp/Unknown input.
+/// a subagent spawn's model/type (see [`spawn_badge`] — a couple of short
+/// identifiers the chip names the child by), and an Mcp input that
+/// serializes within [`MCP_INPUT_MAX`] bytes.
+/// Drops: WriteFile content, EditFile old/new strings, WebFetch prompt, Unknown input,
+/// oversized Mcp input.
 /// Full inputs remain only in the host's local run journal. Idempotent.
 pub fn sanitize_tool_call(call: &ToolCall) -> ToolCall {
     match call {
@@ -581,10 +585,20 @@ pub fn sanitize_tool_call(call: &ToolCall) -> ToolCall {
             url: url.clone(),
             prompt: None,
         },
-        ToolCall::Mcp { server, tool, .. } => ToolCall::Mcp {
+        ToolCall::Mcp {
+            server,
+            tool,
+            input,
+        } => ToolCall::Mcp {
             server: server.clone(),
             tool: tool.clone(),
-            input: spawn_badge(call),
+            input: if call.is_subagent_spawn() {
+                spawn_badge(call)
+            } else {
+                input
+                    .clone()
+                    .filter(|input| input.to_string().len() <= MCP_INPUT_MAX)
+            },
         },
         ToolCall::Unknown { name, .. } => ToolCall::Unknown {
             name: name.clone(),
@@ -937,6 +951,30 @@ mod tests {
             sanitize_tool_call(&call),
             ToolCall::Unknown {
                 name: "SomeTool".into(),
+                input: None,
+            }
+        );
+    }
+
+    #[test]
+    fn sanitize_keeps_a_small_mcp_input_and_drops_an_oversized_one() {
+        let small = ToolCall::Mcp {
+            server: "tilth".into(),
+            tool: "tilth_read".into(),
+            input: Some(serde_json::json!({ "path": "/x", "budget": 3000 })),
+        };
+        assert_eq!(sanitize_tool_call(&small), small);
+
+        let large = ToolCall::Mcp {
+            server: "tilth".into(),
+            tool: "tilth_write".into(),
+            input: Some(serde_json::json!({ "content": "x".repeat(MCP_INPUT_MAX) })),
+        };
+        assert_eq!(
+            sanitize_tool_call(&large),
+            ToolCall::Mcp {
+                server: "tilth".into(),
+                tool: "tilth_write".into(),
                 input: None,
             }
         );
