@@ -437,6 +437,7 @@ fn open_main_window(
             },
             move |window, cx| {
                 window.set_rem_size(px(typography::font_size(cx).pixels()));
+                window.set_zoom(typography::zoom_factor(cx), cx);
                 // React to the user flipping macOS between light and dark. Detached:
                 // the subscription lives as long as the window does, and the window
                 // owns nothing that would drop it early.

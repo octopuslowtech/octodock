@@ -6,7 +6,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
 };
 
-use gpui::{App, Global, Rems, SharedString, Window, px, rems};
+use gpui::{App, Global, Rems, SharedString, Window, rems};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::settings::{self, SavePolicy};
@@ -107,15 +107,6 @@ impl UiFontSize {
             .into_iter()
             .min_by_key(|candidate| candidate.0.abs_diff(self.0))
             .unwrap_or_default()
-    }
-
-    pub fn stepped(self, delta: isize) -> Self {
-        let current = self.normalized();
-        let index = Self::ALL
-            .iter()
-            .position(|candidate| *candidate == current)
-            .unwrap_or(0);
-        Self::ALL[index.saturating_add_signed(delta).min(Self::ALL.len() - 1)]
     }
 }
 
@@ -683,30 +674,34 @@ fn set_category_font_size(size: f32, category: Category, cx: &mut App) -> bool {
     true
 }
 
-/// Apply a supported UI size to the current window and persist it.
-pub fn set_font_size(size: UiFontSize, window: &mut Window, cx: &mut App) -> bool {
-    let size = size.normalized();
-    let Some(state) = cx.try_global::<TypographyState>() else {
-        return false;
-    };
-    if state.size == size {
-        return false;
-    }
+pub const ZOOM_DEFAULT: u16 = 100;
+pub const ZOOM_MIN: u16 = 50;
+pub const ZOOM_MAX: u16 = 200;
+pub const ZOOM_STEP: u16 = 10;
 
-    let state = cx.global_mut::<TypographyState>();
-    state.size = size;
-    state.generation = state.generation.wrapping_add(1);
-    window.set_rem_size(px(size.pixels()));
-    crate::theme::bump_style_generation();
-    cx.refresh_windows();
-    settings::update(SavePolicy::Immediate, cx, |settings| {
-        settings.ui_font_size = size;
-    });
-    true
+pub fn normalize_zoom(percent: u16) -> u16 {
+    (percent.clamp(ZOOM_MIN, ZOOM_MAX) + ZOOM_STEP / 2) / ZOOM_STEP * ZOOM_STEP
 }
 
-pub fn step_font_size(delta: isize, window: &mut Window, cx: &mut App) -> bool {
-    set_font_size(font_size(cx).stepped(delta), window, cx)
+pub fn zoom(cx: &App) -> u16 {
+    settings::ui_zoom(cx)
+}
+
+pub fn zoom_factor(cx: &App) -> f32 {
+    f32::from(zoom(cx)) / 100.0
+}
+
+pub fn set_zoom(percent: u16, window: &mut Window, cx: &mut App) {
+    let percent = normalize_zoom(percent);
+    settings::update(SavePolicy::Immediate, cx, |settings| {
+        settings.ui_zoom = percent;
+    });
+    window.defer(cx, |window, cx| window.set_zoom(zoom_factor(cx), cx));
+}
+
+pub fn step_zoom(steps: i16, window: &mut Window, cx: &mut App) {
+    let delta = steps.saturating_mul(ZOOM_STEP as i16);
+    set_zoom(zoom(cx).saturating_add_signed(delta), window, cx);
 }
 
 #[cfg(test)]
@@ -714,11 +709,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn ui_font_size_steps_through_choices_and_stops_at_the_ends() {
-        assert_eq!(UiFontSize::default().stepped(1).pixels(), 18.0);
-        assert_eq!(UiFontSize::default().stepped(-1).pixels(), 15.0);
-        assert_eq!(UiFontSize::ALL[0].stepped(-1), UiFontSize::ALL[0]);
-        assert_eq!(UiFontSize::ALL[6].stepped(1), UiFontSize::ALL[6]);
+    fn zoom_snaps_to_steps_inside_the_supported_range() {
+        assert_eq!(normalize_zoom(ZOOM_DEFAULT), 100);
+        assert_eq!(normalize_zoom(104), 100);
+        assert_eq!(normalize_zoom(105), 110);
+        assert_eq!(normalize_zoom(0), ZOOM_MIN);
+        assert_eq!(normalize_zoom(u16::MAX), ZOOM_MAX);
     }
 
     #[test]

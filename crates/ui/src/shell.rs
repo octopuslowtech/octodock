@@ -116,8 +116,8 @@ actions!(
         NextSession,
         PrevSession,
         ArchiveSession,
-        IncreaseUiFontSize,
-        DecreaseUiFontSize,
+        IncreaseUiZoom,
+        DecreaseUiZoom,
         FindInChat
     ]
 );
@@ -460,9 +460,9 @@ pub fn apply_keymap(
     crate::app_menus::bind_keys(cx);
     cx.bind_keys([
         KeyBinding::new("ctrl-l", FocusPrompt, None),
-        KeyBinding::new(&platform_combo("mod-="), IncreaseUiFontSize, None),
-        KeyBinding::new(&platform_combo("mod-+"), IncreaseUiFontSize, None),
-        KeyBinding::new(&platform_combo("mod--"), DecreaseUiFontSize, None),
+        KeyBinding::new(&platform_combo("mod-="), IncreaseUiZoom, None),
+        KeyBinding::new(&platform_combo("mod-+"), IncreaseUiZoom, None),
+        KeyBinding::new(&platform_combo("mod--"), DecreaseUiZoom, None),
         KeyBinding::new(
             &valid_or_default(&keymap.random_wallpaper, "mod-u"),
             RandomWallpaper,
@@ -12669,11 +12669,11 @@ impl Render for Shell {
                     }
                 }
             }))
-            .on_action(cx.listener(|_, _: &IncreaseUiFontSize, window, cx| {
-                crate::typography::step_font_size(1, window, cx);
+            .on_action(cx.listener(|_, _: &IncreaseUiZoom, window, cx| {
+                crate::typography::step_zoom(1, window, cx);
             }))
-            .on_action(cx.listener(|_, _: &DecreaseUiFontSize, window, cx| {
-                crate::typography::step_font_size(-1, window, cx);
+            .on_action(cx.listener(|_, _: &DecreaseUiZoom, window, cx| {
+                crate::typography::step_zoom(-1, window, cx);
             }))
             .on_action(cx.listener(|this, _: &ToggleSidebar, _, cx| {
                 if !matches!(this.route, Route::Settings(_)) {

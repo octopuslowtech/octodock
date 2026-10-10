@@ -26,7 +26,7 @@ use crate::popover::{self, Popup};
 use crate::settings::widgets;
 use crate::theme::{Appearance, Theme};
 use crate::theme_library;
-use crate::typography::{self, FontAvailability, UiFontFamily, UiFontSize};
+use crate::typography::{self, FontAvailability, UiFontFamily};
 
 struct ImportDialog {
     input: Entity<ComposerInput>,
@@ -207,59 +207,6 @@ impl FontKind {
             Self::Code => typography::set_code_family(family, cx),
         };
     }
-
-    fn pixel_size(self, cx: &gpui::App) -> f32 {
-        match self {
-            Self::Ui => typography::font_size(cx).pixels(),
-            Self::Terminal => typography::terminal_font_size(cx),
-            Self::Code => typography::code_font_size(cx),
-        }
-    }
-
-    /// Labels for this kind's size ladder, in ladder order. Both ladders read
-    /// as plain pixel values, so all three dropdowns look the same.
-    fn size_labels(self) -> Vec<SharedString> {
-        match self {
-            Self::Ui => UiFontSize::ALL.iter().map(|size| size.label()).collect(),
-            _ => MONO_FONT_SIZES
-                .iter()
-                .map(|size| SharedString::from(format_px(*size)))
-                .collect(),
-        }
-    }
-
-    fn size_count(self) -> usize {
-        match self {
-            Self::Ui => UiFontSize::ALL.len(),
-            _ => MONO_FONT_SIZES.len(),
-        }
-    }
-
-    /// Ladder position of the committed size. Terminal and code sizes are
-    /// stored as free pixels (older settings, hand-edited files), so they snap
-    /// to the nearest rung rather than falling off the list.
-    fn size_ix(self, cx: &gpui::App) -> usize {
-        match self {
-            Self::Ui => UiFontSize::ALL
-                .iter()
-                .position(|size| *size == typography::font_size(cx))
-                .unwrap_or_default(),
-            _ => nearest_mono_ix(self.pixel_size(cx)),
-        }
-    }
-}
-
-/// Pixel ladder behind the terminal and code size dropdowns. Both defaults
-/// (terminal 13, code 12.5) are rungs, so today's rendering is reachable.
-const MONO_FONT_SIZES: [f32; 10] = [10.0, 11.0, 12.0, 12.5, 13.0, 14.0, 15.0, 16.0, 18.0, 20.0];
-
-fn nearest_mono_ix(size: f32) -> usize {
-    MONO_FONT_SIZES
-        .iter()
-        .enumerate()
-        .min_by(|(_, a), (_, b)| (**a - size).abs().total_cmp(&(**b - size).abs()))
-        .map(|(ix, _)| ix)
-        .unwrap_or_default()
 }
 
 #[derive(Clone)]
@@ -296,9 +243,6 @@ pub struct AppearancePage {
     font_list: widgets::PageScroll,
     terminal_font_list: widgets::PageScroll,
     code_font_list: widgets::PageScroll,
-    size_select: widgets::SelectState,
-    terminal_size_select: widgets::SelectState,
-    code_size_select: widgets::SelectState,
     font_menu_dismissed_at: Option<std::time::Instant>,
     terminal_font_menu_dismissed_at: Option<std::time::Instant>,
     code_font_menu_dismissed_at: Option<std::time::Instant>,
@@ -563,9 +507,6 @@ impl AppearancePage {
             font_list: widgets::PageScroll::default(),
             terminal_font_list: widgets::PageScroll::default(),
             code_font_list: widgets::PageScroll::default(),
-            size_select: widgets::SelectState::default(),
-            terminal_size_select: widgets::SelectState::default(),
-            code_size_select: widgets::SelectState::default(),
             font_menu_dismissed_at: None,
             terminal_font_menu_dismissed_at: None,
             code_font_menu_dismissed_at: None,
@@ -651,48 +592,6 @@ impl AppearancePage {
         }
     }
 
-    fn size_select(&self, kind: FontKind) -> &widgets::SelectState {
-        match kind {
-            FontKind::Ui => &self.size_select,
-            FontKind::Terminal => &self.terminal_size_select,
-            FontKind::Code => &self.code_size_select,
-        }
-    }
-
-    fn size_select_mut(&mut self, kind: FontKind) -> &mut widgets::SelectState {
-        match kind {
-            FontKind::Ui => &mut self.size_select,
-            FontKind::Terminal => &mut self.terminal_size_select,
-            FontKind::Code => &mut self.code_size_select,
-        }
-    }
-
-    /// Apply rung `ix` of this kind's size ladder.
-    fn commit_size(
-        &mut self,
-        kind: FontKind,
-        ix: usize,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let ix = ix.min(kind.size_count() - 1);
-        match kind {
-            FontKind::Ui => {
-                typography::set_font_size(UiFontSize::ALL[ix], window, cx);
-            }
-            FontKind::Terminal => {
-                typography::set_terminal_font_size(MONO_FONT_SIZES[ix], cx);
-            }
-            FontKind::Code => {
-                let next = MONO_FONT_SIZES[ix];
-                typography::set_code_font_size(next, cx);
-                // Open file editors only learn the new size through this event.
-                cx.emit(AppearanceSettingsEvent::CodeFontSizeChanged(next));
-            }
-        }
-        cx.notify();
-    }
-
     /// This kind's catalog, narrowed and ranked by the typed query.
     fn visible_choices(
         &self,
@@ -746,20 +645,10 @@ impl AppearancePage {
         }
     }
 
-    /// Only one of this page's six font dropdowns may be open at a time;
-    /// opening any one closes the other five.
-    fn close_other_menus(
-        &mut self,
-        keep_family: Option<FontKind>,
-        keep_size: Option<FontKind>,
-        cx: &mut Context<Self>,
-    ) {
+    fn close_other_menus(&mut self, keep: FontKind, cx: &mut Context<Self>) {
         for kind in FontKind::ALL {
-            if Some(kind) != keep_family {
+            if kind != keep {
                 self.close_font_menu(kind, cx);
-            }
-            if Some(kind) != keep_size {
-                widgets::close_select(self, move |page: &mut Self| page.size_select_mut(kind), cx);
             }
         }
     }
@@ -770,7 +659,7 @@ impl AppearancePage {
     }
 
     fn toggle_font_menu(&mut self, kind: FontKind, window: &mut Window, cx: &mut Context<Self>) {
-        self.close_other_menus(Some(kind), None, cx);
+        self.close_other_menus(kind, cx);
         let just_dismissed = self
             .font_dismissed_at(kind)
             .take()
@@ -1362,14 +1251,6 @@ fn fallback_selection(kind: FontKind) -> UiFontFamily {
     }
 }
 
-fn format_px(size: f32) -> String {
-    if size.fract().abs() < f32::EPSILON {
-        format!("{size:.0} px")
-    } else {
-        format!("{size:.1} px")
-    }
-}
-
 fn bar(fraction: f32, tone: Hsla) -> gpui::Div {
     div()
         .h(px(5.0))
@@ -1951,33 +1832,66 @@ impl AppearancePage {
             .into_any_element()
     }
 
-    /// The size dropdown beside the family picker. Every kind picks from a
-    /// discrete ladder, so all three rows read alike.
-    fn render_size_picker(
-        &mut self,
-        kind: FontKind,
-        theme: &Theme,
-        fixed: SharedString,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let slug = kind.slug();
-        widgets::select(
-            format!("{slug}-font-size-dropdown"),
-            format!("{} size", kind.label()),
-            theme,
-            move |page: &mut Self| page.size_select_mut(kind),
-        )
-        .options(
-            kind.size_labels()
-                .into_iter()
-                .map(widgets::SelectOption::new),
-            kind.size_ix(cx),
-        )
-        .width(128.0)
-        .font_family(fixed)
-        .on_select(move |page, ix, window, cx| page.commit_size(kind, ix, window, cx))
-        .render(self.size_select(kind), cx)
-        .into_any_element()
+    fn render_zoom(&self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
+        let zoom = typography::zoom(cx);
+        let modifier = if cfg!(target_os = "macos") {
+            "⌘"
+        } else {
+            "Ctrl"
+        };
+        let button = |label: &'static str, id: &'static str, aria: &'static str| {
+            compact_action(theme, label, id)
+                .tab_index(0)
+                .role(gpui::Role::Button)
+                .aria_label(aria)
+                .focus_visible(|s| s.border_2().border_color(theme.accent).opacity(1.0))
+        };
+        widgets::card_row(theme, false)
+            .justify_between()
+            .child(
+                div()
+                    .min_w(px(160.0))
+                    .flex_1()
+                    .child(widgets::row_title(theme, "Zoom"))
+                    .child(widgets::meta_line(
+                        theme,
+                        vec![
+                            div()
+                                .child(format!(
+                                    "Scales the entire interface · {modifier} + / {modifier} −"
+                                ))
+                                .into_any_element(),
+                        ],
+                    )),
+            )
+            .child(
+                div()
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .gap(px(6.0))
+                    .child(
+                        button("Reset", "ui-zoom-reset", "Reset zoom").on_click(cx.listener(
+                            |_, _, window, cx| {
+                                typography::set_zoom(typography::ZOOM_DEFAULT, window, cx);
+                            },
+                        )),
+                    )
+                    .child(button("−", "ui-zoom-out", "Zoom out").on_click(
+                        cx.listener(|_, _, window, cx| typography::step_zoom(-1, window, cx)),
+                    ))
+                    .child(
+                        div()
+                            .w(px(52.0))
+                            .text_center()
+                            .text_size(typography::ui_rems(13.0))
+                            .child(format!("{zoom}%")),
+                    )
+                    .child(button("+", "ui-zoom-in", "Zoom in").on_click(
+                        cx.listener(|_, _, window, cx| typography::step_zoom(1, window, cx)),
+                    )),
+            )
+            .into_any_element()
     }
 
     fn render_theme_selector(
@@ -3906,17 +3820,13 @@ impl Render for AppearancePage {
             window.viewport_size(),
             cx,
         );
-        let ui_size = self.render_size_picker(FontKind::Ui, &theme, fixed.clone(), cx);
-        let terminal_size = self.render_size_picker(FontKind::Terminal, &theme, fixed.clone(), cx);
-        let code_size = self.render_size_picker(FontKind::Code, &theme, fixed.clone(), cx);
-
         let mut font_rows = widgets::section_card(&theme)
             .mt_0()
             .font_family(fixed.clone());
-        for (ix, (kind, picker, size_control)) in [
-            (FontKind::Ui, ui_picker, ui_size),
-            (FontKind::Terminal, terminal_picker, terminal_size),
-            (FontKind::Code, code_picker, code_size),
+        for (ix, (kind, picker)) in [
+            (FontKind::Ui, ui_picker),
+            (FontKind::Terminal, terminal_picker),
+            (FontKind::Code, code_picker),
         ]
         .into_iter()
         .enumerate()
@@ -3943,11 +3853,11 @@ impl Render for AppearancePage {
                             .flex_wrap()
                             .items_center()
                             .gap(px(8.0))
-                            .child(picker)
-                            .child(size_control),
+                            .child(picker),
                     ),
             );
         }
+        font_rows = font_rows.child(self.render_zoom(&theme, cx));
         font_rows = font_rows.child(self.render_transcript_width(&theme, window, cx));
         let mut font_section = widgets::section(&theme, "Fonts and layout", font_rows);
         for kind in FontKind::ALL {
@@ -4462,9 +4372,7 @@ mod tests {
     }
 
     #[test]
-    fn pixel_sizes_render_whole_and_fractional_values() {
-        assert_eq!(format_px(13.0), "13 px");
-        assert_eq!(format_px(typography::CODE_FONT_SIZE_DEFAULT), "12.5 px");
+    fn font_sizes_clamp_to_the_supported_range() {
         assert_eq!(
             typography::clamp_font_size(typography::FONT_SIZE_MAX + 1.0),
             typography::FONT_SIZE_MAX
@@ -4473,39 +4381,6 @@ mod tests {
             typography::clamp_font_size(typography::FONT_SIZE_MIN - 1.0),
             typography::FONT_SIZE_MIN
         );
-    }
-
-    #[test]
-    fn font_size_options_are_ordered_and_include_the_default() {
-        let values = UiFontSize::ALL.map(UiFontSize::pixels);
-        assert!(values.windows(2).all(|pair| pair[0] < pair[1]));
-        assert!(UiFontSize::ALL.contains(&UiFontSize::default()));
-    }
-
-    #[test]
-    fn mono_size_ladder_keeps_both_defaults_exactly_reachable() {
-        assert!(MONO_FONT_SIZES.windows(2).all(|pair| pair[0] < pair[1]));
-        for default in [
-            typography::TERMINAL_FONT_SIZE_DEFAULT,
-            typography::CODE_FONT_SIZE_DEFAULT,
-        ] {
-            assert_eq!(MONO_FONT_SIZES[nearest_mono_ix(default)], default);
-        }
-        // Off-ladder values (older settings, hand-edited files) snap, never drop.
-        assert_eq!(MONO_FONT_SIZES[nearest_mono_ix(0.0)], MONO_FONT_SIZES[0]);
-        assert_eq!(MONO_FONT_SIZES[nearest_mono_ix(99.0)], 20.0);
-        assert_eq!(MONO_FONT_SIZES[nearest_mono_ix(12.4)], 12.5);
-    }
-
-    #[test]
-    fn every_size_dropdown_labels_its_whole_ladder_in_pixels() {
-        for kind in FontKind::ALL {
-            let labels = kind.size_labels();
-            assert_eq!(labels.len(), kind.size_count());
-            assert!(labels.iter().all(|label| label.ends_with(" px")));
-        }
-        assert!(FontKind::Terminal.size_labels().contains(&"13 px".into()));
-        assert!(FontKind::Code.size_labels().contains(&"12.5 px".into()));
     }
 
     #[gpui::test]
@@ -4580,15 +4455,13 @@ mod tests {
     }
 
     #[gpui::test]
-    fn size_dropdowns_commit_from_the_ladder_and_enter_leaves_menus_closed(
-        cx: &mut gpui::TestAppContext,
-    ) {
+    fn enter_commits_the_family_and_leaves_the_menu_closed(cx: &mut gpui::TestAppContext) {
         cx.update(|cx| {
             gpui_base::init(cx);
             cx.set_global(Theme::dark());
             typography::init(
                 UiFontFamily::Geist,
-                UiFontSize::default(),
+                typography::UiFontSize::default(),
                 UiFontFamily::GeistMono,
                 typography::TERMINAL_FONT_SIZE_DEFAULT,
                 UiFontFamily::GeistMono,
@@ -4600,18 +4473,7 @@ mod tests {
         let window = cx.add_window(|_, cx| AppearancePage::new(cx));
         window
             .update(cx, |page, window, cx| {
-                for kind in [FontKind::Terminal, FontKind::Code] {
-                    let target = kind.size_ix(cx) + 1;
-                    page.commit_size(kind, target, window, cx);
-                    assert_eq!(kind.pixel_size(cx), MONO_FONT_SIZES[target]);
-                    assert_eq!(kind.size_ix(cx), target);
-                }
-
-                // Opening a family menu closes a size menu left open elsewhere.
-                page.size_select_mut(FontKind::Ui).open(0);
-                assert!(page.size_select(FontKind::Ui).is_open());
                 page.toggle_font_menu(FontKind::Code, window, cx);
-                assert!(!page.size_select(FontKind::Ui).is_open());
                 assert!(page.font_menu(FontKind::Code).is_open());
 
                 // Enter commits and reports the key consumed — without that the
@@ -4639,7 +4501,7 @@ mod tests {
             cx.set_global(Theme::dark());
             typography::init(
                 UiFontFamily::Geist,
-                UiFontSize::default(),
+                typography::UiFontSize::default(),
                 UiFontFamily::Installed("Arial".into()),
                 typography::TERMINAL_FONT_SIZE_DEFAULT,
                 UiFontFamily::Installed("Arial".into()),

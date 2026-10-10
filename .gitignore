@@ -11,6 +11,8 @@ node_modules
 build/
 edge/dist/
 .agents
-.claude
+.claude/*
+!.claude/skills/
 CLAUDE.md
 /scripts/**/__pycache__/
+/vendor/zui/

@@ -81,14 +81,17 @@ loro-protocol = "0.3"
 # Linux — the Metal path's snapshot/blur/composite, ported).
 # Paint-time rounded image masks (#9), bounded Windows backdrop blur and
 # translucent compositing, plus blur-aware scene batching (#10).
-gpui = { git = "https://github.com/zeronsh/zui", rev = "dce5c1f737a834b32c2b531d552ea78035e54093" }
-gpui_platform = { git = "https://github.com/zeronsh/zui", rev = "dce5c1f737a834b32c2b531d552ea78035e54093", features = [
+# octopuslowtech/zui-fork `ui-zoom` adds Window::set_zoom on top of the zeronsh/zui
+# rev upstream pins (dce5c1f); merge the new upstream rev into that branch when bumping.
+# A working clone lives in the git-ignored vendor/zui.
+gpui = { git = "https://github.com/octopuslowtech/zui-fork", rev = "cff76c53c36a1eae6b78b77a82260f156028aa77" }
+gpui_platform = { git = "https://github.com/octopuslowtech/zui-fork", rev = "cff76c53c36a1eae6b78b77a82260f156028aa77", features = [
     "wayland",
     "x11",
     "font-kit",
     "runtime_shaders",
 ] }
-gpui_tokio = { git = "https://github.com/zeronsh/zui", rev = "dce5c1f737a834b32c2b531d552ea78035e54093" }
+gpui_tokio = { git = "https://github.com/octopuslowtech/zui-fork", rev = "cff76c53c36a1eae6b78b77a82260f156028aa77" }
 gpui-base = { git = "https://github.com/zeronsh/gpui-component", rev = "47ccd07295858d66f8fe826df9651a56218eb887" }
 
 # diffs
@@ -161,19 +164,6 @@ opt-level = 0
 [profile.dev.package."*"]
 opt-level = 2
 
-# Mobile core (scripts/ios/build-core.sh). Always optimized — layout and sync
-# run on the phone's hot paths, so even Debug app builds link an -O core.
-[profile.mobile]
-inherits = "release"
-lto = false
-strip = false
-debug = "line-tables-only"
-incremental = true
-codegen-units = 16
-
-# TestFlight/App Store archives.
-[profile.mobile-dist]
-inherits = "release"
-lto = "thin"
-codegen-units = 1
-strip = "debuginfo"
+[patch."https://github.com/zeronsh/zui"]
+gpui = { git = "https://github.com/octopuslowtech/zui-fork", rev = "cff76c53c36a1eae6b78b77a82260f156028aa77" }
+gpui_macros = { git = "https://github.com/octopuslowtech/zui-fork", rev = "cff76c53c36a1eae6b78b77a82260f156028aa77" }

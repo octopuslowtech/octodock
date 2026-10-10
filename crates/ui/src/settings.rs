@@ -272,6 +272,12 @@ pub fn transcript_width(cx: &App) -> f32 {
         .unwrap_or(TRANSCRIPT_WIDTH_DEFAULT)
 }
 
+pub fn ui_zoom(cx: &App) -> u16 {
+    cx.try_global::<SettingsStore>()
+        .map(|store| store.current.ui_zoom)
+        .unwrap_or(crate::typography::ZOOM_DEFAULT)
+}
+
 pub fn set_transcript_width(width: f32, cx: &mut App) {
     if update(SavePolicy::Debounced, cx, |settings| {
         settings.transcript_width = normalize_transcript_width(width);
@@ -951,6 +957,7 @@ pub struct UiSettings {
     pub ui_font_family: crate::typography::UiFontFamily,
     /// Base size for interface and conversational prose.
     pub ui_font_size: crate::typography::UiFontSize,
+    pub ui_zoom: u16,
     /// Terminal family and absolute pixel size. Only fixed-width families
     /// qualify, including compatible Nerd Fonts.
     pub terminal_font_family: crate::typography::UiFontFamily,
@@ -1074,6 +1081,7 @@ impl Default for UiSettings {
             git_history_author_display: GitHistoryAuthorDisplay::default(),
             ui_font_family: crate::typography::UiFontFamily::default(),
             ui_font_size: crate::typography::UiFontSize::default(),
+            ui_zoom: crate::typography::ZOOM_DEFAULT,
             terminal_font_family: crate::typography::UiFontFamily::GeistMono,
             terminal_font_size: crate::typography::TERMINAL_FONT_SIZE_DEFAULT,
             code_font_family: crate::typography::UiFontFamily::GeistMono,
@@ -1726,6 +1734,7 @@ impl UiSettings {
             git_history_author_display,
             ui_font_family,
             ui_font_size,
+            ui_zoom,
             terminal_font_family,
             terminal_font_size,
             code_font_family,
@@ -1803,6 +1812,7 @@ impl UiSettings {
         self.git_history_column_widths = self.git_history_column_widths.clamped();
         self.git_history_column_order = self.git_history_column_order.normalized();
         self.ui_font_size = self.ui_font_size.normalized();
+        self.ui_zoom = crate::typography::normalize_zoom(self.ui_zoom);
         if let Some(background) = self.new_thread_composer_background.as_mut() {
             background.adjustment = background.adjustment.normalized();
         }
@@ -2805,6 +2815,7 @@ mod tests {
             git_history_author_display: GitHistoryAuthorDisplay::Name,
             ui_font_family: crate::typography::UiFontFamily::Installed("Arial".into()),
             ui_font_size: crate::typography::UiFontSize::ALL[5],
+            ui_zoom: 120,
             theme_selection: zeron_theme::ThemeSelection {
                 light: "catppuccin-latte".into(),
                 dark: "catppuccin-mocha".into(),
