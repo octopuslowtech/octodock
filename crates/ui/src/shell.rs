@@ -17324,7 +17324,9 @@ mod settings_modal_regressions {
         shell.update(cx, |shell, cx| {
             // No engine in tests: render the workspace, not the boot gate.
             shell.debug_gate = Some(GatePhase::Ready);
-            shell.open_settings(SettingsSection::Devices, cx)
+            shell.open_settings(SettingsSection::Devices, cx);
+            shell.route = Route::Settings(SettingsSection::Devices);
+            shell.remember_settings_section(SettingsSection::Devices, cx)
         });
         cx.run_until_parked();
         cx.update(|window, cx| window.draw(cx).clear());

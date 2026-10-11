@@ -14,7 +14,7 @@
 //! registry, geometry and mouse listeners live in `render.rs`.
 
 use std::ops::Range;
-use std::sync::{Mutex, OnceLock};
+use std::sync::Mutex;
 
 /// One element's slice of the selection, in document order.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -46,9 +46,18 @@ struct MdSelection {
     spans: Vec<Span>,
 }
 
+#[cfg(not(test))]
 fn state() -> &'static Mutex<Option<MdSelection>> {
-    static STATE: OnceLock<Mutex<Option<MdSelection>>> = OnceLock::new();
+    static STATE: std::sync::OnceLock<Mutex<Option<MdSelection>>> = std::sync::OnceLock::new();
     STATE.get_or_init(|| Mutex::new(None))
+}
+
+#[cfg(test)]
+fn state() -> &'static Mutex<Option<MdSelection>> {
+    thread_local! {
+        static STATE: &'static Mutex<Option<MdSelection>> = Box::leak(Box::new(Mutex::new(None)));
+    }
+    STATE.with(|state| *state)
 }
 
 /// Selection state is process-global; tests that exercise its lifecycle must
