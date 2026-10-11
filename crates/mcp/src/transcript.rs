@@ -271,6 +271,7 @@ mod tests {
                         subagent_ref: None,
                         subagent_status: None,
                         subagent_tail: None,
+                        duration_ms: None,
                     },
                     MessagePart::Text {
                         id: "t2".into(),

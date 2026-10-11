@@ -1367,6 +1367,7 @@ mod tests {
             subagent_ref: doc.map(str::to_owned),
             subagent_status: status,
             subagent_tail: None,
+            duration_ms: None,
         }
     }
 

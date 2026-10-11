@@ -162,6 +162,23 @@ pub(crate) struct ContentBlock {
     pub tool_use_id: String,
     #[serde(default)]
     pub is_error: Option<bool>,
+    #[serde(default)]
+    pub content: Value,
+}
+
+impl ContentBlock {
+    pub fn result_text(&self) -> Option<String> {
+        let text = match &self.content {
+            Value::String(text) => text.clone(),
+            Value::Array(blocks) => blocks
+                .iter()
+                .filter_map(|block| block.get("text").and_then(Value::as_str))
+                .collect::<Vec<_>>()
+                .join("\n"),
+            _ => return None,
+        };
+        (!text.trim().is_empty()).then_some(text)
+    }
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -503,5 +520,30 @@ mod tests {
             user_message_line_with_images("hi", &[]),
             user_message_line("hi")
         );
+    }
+}
+
+#[cfg(test)]
+mod result_text_tests {
+    use super::*;
+
+    #[test]
+    fn tool_result_text_reads_string_and_block_content() {
+        let block = |content: Value| -> ContentBlock {
+            serde_json::from_value(json!({ "type": "tool_result", "content": content })).unwrap()
+        };
+        assert_eq!(block(json!("ok")).result_text().as_deref(), Some("ok"));
+        assert_eq!(
+            block(json!([
+                { "type": "text", "text": "a" },
+                { "type": "image", "source": {} },
+                { "type": "text", "text": "b" }
+            ]))
+            .result_text()
+            .as_deref(),
+            Some("a\nb")
+        );
+        assert_eq!(block(json!("  ")).result_text(), None);
+        assert_eq!(block(Value::Null).result_text(), None);
     }
 }

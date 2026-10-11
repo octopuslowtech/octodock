@@ -2000,6 +2000,7 @@ fn render_parts(parts: &[MessagePart]) -> Vec<MessagePart> {
                 subagent_ref,
                 subagent_status,
                 subagent_tail,
+                duration_ms,
             } => MessagePart::Tool {
                 id: id.clone(),
                 call: sanitize_tool_call(call),
@@ -2018,6 +2019,7 @@ fn render_parts(parts: &[MessagePart]) -> Vec<MessagePart> {
                 subagent_ref: subagent_ref.clone(),
                 subagent_status: *subagent_status,
                 subagent_tail: subagent_tail.clone(),
+                duration_ms: *duration_ms,
             },
             other => other.clone(),
         })
@@ -2318,6 +2320,7 @@ async fn drive_run(
 
     let doc_ref: &SessionDoc = &doc;
     let mut folded: Vec<MessagePart> = Vec::new();
+    let mut tool_started: HashMap<String, std::time::Instant> = HashMap::new();
     // Every tool id this run has folded, across segment resets. Adapters
     // re-emit shape-bearing `tool_call_update`s (title/rawInput refreshes,
     // long-running completions) as full ToolCall events; once the fold has
@@ -3177,6 +3180,23 @@ async fn drive_run(
         let skip_fold = matches!(&event, AgentEvent::SessionStarted { .. }) && !folded.is_empty();
         if !skip_fold {
             fold_event_into_parts(&mut folded, &event);
+            match &event {
+                AgentEvent::ToolCall { id, .. } => {
+                    tool_started
+                        .entry(id.clone())
+                        .or_insert_with(std::time::Instant::now);
+                }
+                AgentEvent::ToolResult { id, .. } => {
+                    if let Some(started) = tool_started.remove(id) {
+                        zeron_doc::stamp_tool_duration(
+                            &mut folded,
+                            id,
+                            started.elapsed().as_millis() as u64,
+                        );
+                    }
+                }
+                _ => {}
+            }
             // R2 sidecar PARKED (2026-08-10, product call): the fold's
             // summary/stats ARE the doc's whole record — no refs stamped, no
             // uploads. Full outputs survive only in the host's local run

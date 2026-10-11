@@ -1299,6 +1299,7 @@ fn spawn_chip(id: &str, status: SubagentStatus) -> MessagePart {
         subagent_ref: Some(format!("{CHAT}--sub--{id}")),
         subagent_status: Some(status),
         subagent_tail: None,
+        duration_ms: None,
     }
 }
 

@@ -361,6 +361,7 @@ pub struct ToolItem {
     /// per-delta header rewrites read as noise). Never rendered; still
     /// fingerprinted so an old doc's chips re-splice correctly.
     pub subagent_tail: Option<SharedString>,
+    pub duration_ms: Option<u64>,
     /// `Call` is a real doc tool invocation; `Thought` (a reasoning part
     /// riding the tool group — the thought process belongs inside the
     /// combined "Ran N commands" accordion, opening/closing with the same
@@ -408,13 +409,50 @@ fn tool_group_collapses(tools: &[ToolItem]) -> bool {
 /// here — conservative enough to fit the card at typical transcript widths.
 const THOUGHT_WRAP_COLS: usize = 96;
 
+struct ThoughtWrap<'a> {
+    budget: f32,
+    width: &'a dyn Fn(char, &InlineStyle) -> f32,
+}
+
+impl ThoughtWrap<'_> {
+    fn text(&self, text: &str, style: &InlineStyle) -> f32 {
+        text.chars().map(|c| (self.width)(c, style)).sum()
+    }
+
+    fn space(&self) -> f32 {
+        (self.width)(' ', &InlineStyle::default())
+    }
+
+    fn room(&self, indent: usize) -> f32 {
+        let space = self.space();
+        (self.budget - indent as f32 * space).max(16.0 * space)
+    }
+
+    fn code_cols(&self, indent: usize) -> usize {
+        let code = InlineStyle {
+            code: true,
+            ..InlineStyle::default()
+        };
+        ((self.room(indent) / (self.width)('0', &code).max(0.01)) as usize).max(16)
+    }
+}
+
+fn unit_width(_: char, _: &InlineStyle) -> f32 {
+    1.0
+}
+
+const THOUGHT_COLS: ThoughtWrap<'static> = ThoughtWrap {
+    budget: THOUGHT_WRAP_COLS as f32,
+    width: &unit_width,
+};
+
 /// Flatten a thought's parsed markdown into wrapped, STYLED detail lines —
 /// inline markers render as real styling (bold/italic/code/links) instead of
 /// literal `**` glyphs; blocks flatten structurally (headings bold, list
 /// bullets, quote bars, verbatim code lines). Every line is one fixed-height
 /// row, so the detail height stays analytic (lines × [`OUTPUT_LINE_HEIGHT`])
 /// and the group's fold tween keeps working without measurement.
-fn thought_lines(tree: &BlockTree) -> Vec<Vec<InlineRun>> {
+fn thought_lines(tree: &BlockTree, wrap: &ThoughtWrap) -> Vec<Vec<InlineRun>> {
     let mut out: Vec<Vec<InlineRun>> = Vec::new();
     for top in &tree.blocks {
         if !out.is_empty() {
@@ -422,7 +460,7 @@ fn thought_lines(tree: &BlockTree) -> Vec<Vec<InlineRun>> {
             // plain-text wrap kept paragraph gaps the same way).
             out.push(Vec::new());
         }
-        thought_block_lines(&top.block, 0, &mut out);
+        thought_block_lines(&top.block, 0, wrap, &mut out);
     }
     while out
         .last()
@@ -471,8 +509,14 @@ fn finish_line(indent: usize, mut line: Vec<InlineRun>) -> Vec<InlineRun> {
 /// spaces riding the preceding run, and pathological overlong tokens
 /// hard-split at the budget. Hard breaks (`\n` runs) split into
 /// separately-wrapped segments.
-fn wrap_styled_runs(runs: &[InlineRun], indent: usize, out: &mut Vec<Vec<InlineRun>>) {
-    let budget = THOUGHT_WRAP_COLS.saturating_sub(indent).max(16);
+fn wrap_styled_runs(
+    runs: &[InlineRun],
+    indent: usize,
+    wrap: &ThoughtWrap,
+    out: &mut Vec<Vec<InlineRun>>,
+) {
+    let budget = wrap.room(indent);
+    let space = wrap.space();
     let mut segments: Vec<Vec<InlineRun>> = vec![Vec::new()];
     for run in runs {
         for (ix, piece) in run.text.split('\n').enumerate() {
@@ -515,57 +559,59 @@ fn wrap_styled_runs(runs: &[InlineRun], indent: usize, out: &mut Vec<Vec<InlineR
             }
         }
         let mut line: Vec<InlineRun> = Vec::new();
-        let mut len = 0usize;
+        let mut len = 0.0f32;
         for token in tokens {
-            let tok_len: usize = token.iter().map(|r| r.text.chars().count()).sum();
+            let tok_len: f32 = token.iter().map(|r| wrap.text(&r.text, &r.style)).sum();
             if tok_len > budget {
                 // Hard-split a pathological token at the budget.
-                if len > 0 {
+                if len > 0.0 {
                     out.push(finish_line(indent, std::mem::take(&mut line)));
-                    len = 0;
+                    len = 0.0;
                 }
                 for piece in token {
-                    let mut chars = piece.text.chars();
-                    loop {
-                        let chunk: String = chars.by_ref().take(budget - len).collect();
-                        if chunk.is_empty() {
-                            break;
-                        }
-                        len += chunk.chars().count();
-                        push_styled(&mut line, &chunk, &piece.style);
-                        if len == budget {
+                    let mut buf = [0u8; 4];
+                    for c in piece.text.chars() {
+                        let width = (wrap.width)(c, &piece.style);
+                        if len > 0.0 && len + width > budget {
                             out.push(finish_line(indent, std::mem::take(&mut line)));
-                            len = 0;
+                            len = 0.0;
                         }
+                        push_styled(&mut line, c.encode_utf8(&mut buf), &piece.style);
+                        len += width;
                     }
                 }
                 continue;
             }
-            if len > 0 && len + 1 + tok_len > budget {
+            if len > 0.0 && len + space + tok_len > budget {
                 out.push(finish_line(indent, std::mem::take(&mut line)));
-                len = 0;
+                len = 0.0;
             }
-            if len > 0 {
+            if len > 0.0 {
                 if let Some(last) = line.last_mut() {
                     last.text.push(' ');
                 }
-                len += 1;
+                len += space;
             }
             for piece in token {
                 push_styled(&mut line, &piece.text, &piece.style);
             }
             len += tok_len;
         }
-        if len > 0 {
+        if len > 0.0 {
             out.push(finish_line(indent, line));
         }
     }
 }
 
 /// One markdown block into thought detail lines, `indent` spaces deep.
-fn thought_block_lines(block: &Block, indent: usize, out: &mut Vec<Vec<InlineRun>>) {
+fn thought_block_lines(
+    block: &Block,
+    indent: usize,
+    wrap: &ThoughtWrap,
+    out: &mut Vec<Vec<InlineRun>>,
+) {
     match block {
-        Block::Paragraph { runs } => wrap_styled_runs(runs, indent, out),
+        Block::Paragraph { runs } => wrap_styled_runs(runs, indent, wrap, out),
         Block::Heading { runs, .. } => {
             // Headings keep the detail's single type size — bold is the cue
             // (an 18px line box can't host display sizes).
@@ -577,7 +623,7 @@ fn thought_block_lines(block: &Block, indent: usize, out: &mut Vec<Vec<InlineRun
                     r
                 })
                 .collect();
-            wrap_styled_runs(&bold, indent, out);
+            wrap_styled_runs(&bold, indent, wrap, out);
         }
         Block::CodeBlock { code, .. } => {
             let style = InlineStyle {
@@ -585,7 +631,7 @@ fn thought_block_lines(block: &Block, indent: usize, out: &mut Vec<Vec<InlineRun
                 ..InlineStyle::default()
             };
             for line in code.lines() {
-                for chunk in wrap_cols(line, THOUGHT_WRAP_COLS.saturating_sub(indent).max(16)) {
+                for chunk in wrap_cols(line, wrap.code_cols(indent)) {
                     let mut row = indent_run(indent);
                     if !chunk.is_empty() {
                         row.push(InlineRun {
@@ -610,7 +656,7 @@ fn thought_block_lines(block: &Block, indent: usize, out: &mut Vec<Vec<InlineRun
                 let inner = indent + marker.chars().count();
                 let mark = out.len();
                 for child in item {
-                    thought_block_lines(child, inner, out);
+                    thought_block_lines(child, inner, wrap, out);
                 }
                 if out.len() == mark {
                     // An empty item still shows its marker.
@@ -629,7 +675,7 @@ fn thought_block_lines(block: &Block, indent: usize, out: &mut Vec<Vec<InlineRun
                 if ix > 0 {
                     out.push(Vec::new());
                 }
-                thought_block_lines(child, indent + 2, out);
+                thought_block_lines(child, indent + 2, wrap, out);
             }
             // Trade the two quote-indent spaces for the bar on every quoted
             // line — replace, not overwrite: nested list handlers already
@@ -659,9 +705,9 @@ fn thought_block_lines(block: &Block, indent: usize, out: &mut Vec<Vec<InlineRun
                 }
                 line
             };
-            wrap_styled_runs(&join(header, true), indent, out);
+            wrap_styled_runs(&join(header, true), indent, wrap, out);
             for row in rows {
-                wrap_styled_runs(&join(row, false), indent, out);
+                wrap_styled_runs(&join(row, false), indent, wrap, out);
             }
         }
         Block::Rule => {
@@ -680,8 +726,8 @@ fn thought_block_lines(block: &Block, indent: usize, out: &mut Vec<Vec<InlineRun
 /// the group's fold tween needs it; see [`thought_lines`]). Capped like tool
 /// outputs, with the counted tail. `live` = the part is still streaming
 /// (chip defaults open).
-fn thought_item(part_id: &str, tree: &BlockTree, live: bool) -> ToolItem {
-    let mut lines = thought_lines(tree);
+fn thought_detail(tree: &Arc<BlockTree>, live: bool, wrap: &ThoughtWrap) -> Option<ToolDetail> {
+    let mut lines = thought_lines(tree, wrap);
     let truncated_by = lines.len().saturating_sub(OUTPUT_DETAIL_MAX_LINES);
     if truncated_by > 0 {
         // Keep the TAIL while streaming (the fresh thinking is the signal);
@@ -699,6 +745,14 @@ fn thought_item(part_id: &str, tree: &BlockTree, live: bool) -> ToolItem {
             lines.truncate(OUTPUT_DETAIL_MAX_LINES);
         }
     }
+    (!lines.is_empty()).then(|| ToolDetail::Thought {
+        lines,
+        truncated_by,
+        tree: tree.clone(),
+    })
+}
+
+fn thought_item(part_id: &str, tree: &Arc<BlockTree>, live: bool) -> ToolItem {
     ToolItem {
         part_id: part_id.into(),
         call: ToolCall::Unknown {
@@ -707,12 +761,7 @@ fn thought_item(part_id: &str, tree: &BlockTree, live: bool) -> ToolItem {
         },
         is_error: false,
         resolved: !live,
-        detail: (!lines.is_empty()).then(|| {
-            Arc::new(ToolDetail::Thought {
-                lines,
-                truncated_by,
-            })
-        }),
+        detail: thought_detail(tree, live, &THOUGHT_COLS).map(Arc::new),
         invocation: None,
         output_ref: None,
         output_bytes: None,
@@ -720,6 +769,7 @@ fn thought_item(part_id: &str, tree: &BlockTree, live: bool) -> ToolItem {
         subagent_ref: None,
         subagent_status: None,
         subagent_tail: None,
+        duration_ms: None,
         kind: ToolItemKind::Thought,
         images: Arc::new([]),
     }
@@ -730,7 +780,7 @@ fn thought_item(part_id: &str, tree: &BlockTree, live: bool) -> ToolItem {
 /// as a "Wrote" chip whose detail is the text's markdown flattened exactly
 /// like a thought's. `live` = the part is the streaming tail — unresolved,
 /// so the collapsed header keeps its working shimmer until the reply lands.
-fn note_item(part_id: &str, tree: &BlockTree, live: bool) -> ToolItem {
+fn note_item(part_id: &str, tree: &Arc<BlockTree>, live: bool) -> ToolItem {
     let mut item = thought_item(part_id, tree, live);
     item.call = ToolCall::Unknown {
         name: "Note".into(),
@@ -755,6 +805,7 @@ pub enum ToolDetail {
     Thought {
         lines: Vec<Vec<InlineRun>>,
         truncated_by: usize,
+        tree: Arc<BlockTree>,
     },
     /// A file diff, in the changes pane's model: hunks with 3 lines of
     /// context, dual line numbers, and (for recognized languages) syntax
@@ -773,7 +824,7 @@ pub enum ToolDetail {
 }
 
 /// Max verbatim output lines per chip before the counted tail row.
-pub const OUTPUT_DETAIL_MAX_LINES: usize = 24;
+pub const OUTPUT_DETAIL_MAX_LINES: usize = 200;
 
 /// Max diff lines an inline tool-diff detail renders — the detail is one
 /// stacked element inside its transcript row, so it must stay bounded
@@ -866,12 +917,11 @@ fn wrap_cols(line: &str, cols: usize) -> Vec<SharedString> {
         .collect()
 }
 
-/// Build a chip's full-invocation block — the complete tool call the header
-/// truncates to one line: the whole command, pattern, or URL, todo items one
-/// per line, MCP/unknown input as pretty-printed JSON. Reuses the output
-/// code-block payload so rendering and height stay one implementation.
-pub fn call_block(call: &ToolCall) -> Option<ToolDetail> {
-    let text: String = match call {
+fn call_text(call: &ToolCall) -> String {
+    if let Some((_, args)) = call.skill_invocation() {
+        return args.to_owned();
+    }
+    match call {
         ToolCall::Exec { command } => command.clone(),
         ToolCall::ReadFile { path } => path.clone(),
         ToolCall::WriteFile { path, content } => match content {
@@ -907,10 +957,7 @@ pub fn call_block(call: &ToolCall) -> Option<ToolDetail> {
             tool,
             input,
         } => match input {
-            Some(input) => format!(
-                "{server} · {tool}\n{}",
-                serde_json::to_string_pretty(input).unwrap_or_default()
-            ),
+            Some(input) => serde_json::to_string_pretty(input).unwrap_or_default(),
             None => format!("{server} · {tool}"),
         },
         ToolCall::Unknown { name, input } => match input {
@@ -920,11 +967,36 @@ pub fn call_block(call: &ToolCall) -> Option<ToolDetail> {
             ),
             None => name.clone(),
         },
-    };
-    let mut lines: Vec<SharedString> = text
-        .lines()
-        .flat_map(|l| wrap_cols(l, CALL_WRAP_COLS))
-        .collect();
+    }
+}
+
+/// Build a chip's full-invocation block — the complete tool call the header
+/// truncates to one line: the whole command, pattern, or URL, todo items one
+/// per line, MCP input as pretty-printed JSON. Reuses the output
+/// code-block payload so rendering and height stay one implementation.
+pub fn call_block(call: &ToolCall) -> Option<ToolDetail> {
+    call_block_cols(call, CALL_WRAP_COLS)
+}
+
+const DETAIL_GUTTERS: f32 = 96.0;
+const CALL_PANEL_CHROME: f32 = 72.0;
+const THOUGHT_CHROME: f32 = 32.0;
+
+fn detail_column(content_width: f32, list_width: f32) -> f32 {
+    if list_width > 0.0 {
+        content_width.min(list_width - DETAIL_GUTTERS)
+    } else {
+        content_width
+    }
+}
+
+fn call_wrap_cols(column: f32, advance: f32) -> usize {
+    (((column - CALL_PANEL_CHROME) / advance.max(1.0)) as usize).max(16)
+}
+
+fn call_block_cols(call: &ToolCall, cols: usize) -> Option<ToolDetail> {
+    let text = call_text(call);
+    let mut lines: Vec<SharedString> = text.lines().flat_map(|l| wrap_cols(l, cols)).collect();
     while lines.last().is_some_and(|l| l.trim().is_empty()) {
         lines.pop();
     }
@@ -1164,6 +1236,7 @@ fn tool_fingerprint(tools: &[ToolItem], auto_open: bool) -> u64 {
             Some(ToolDetail::Thought {
                 lines,
                 truncated_by,
+                ..
             }) => {
                 // Byte-exact plus style bits: a live mend can restyle runs
                 // without changing the flattened length, and the row must
@@ -1458,6 +1531,7 @@ pub fn rows_for_entry(
                 subagent_ref,
                 subagent_status,
                 subagent_tail,
+                duration_ms,
                 ..
             } => {
                 let item = ToolItem {
@@ -1474,6 +1548,7 @@ pub fn rows_for_entry(
                     subagent_ref: subagent_ref.clone().map(SharedString::from),
                     subagent_status: *subagent_status,
                     subagent_tail: subagent_tail.clone().map(SharedString::from),
+                    duration_ms: *duration_ms,
                     kind: ToolItemKind::Call,
                     images: crate::tool_images::image_paths(call, output.as_deref()),
                 };
@@ -2143,6 +2218,252 @@ pub fn chips_height(count: usize) -> f32 {
     CHIPS_TOP_PAD + count as f32 * CHIP_HEIGHT + (count as f32 - 1.0) * CHIP_GAP
 }
 
+const CODE_PANEL_MARGIN: f32 = 10.0;
+const CODE_PANEL_BAR_HEIGHT: f32 = 30.0;
+const CODE_PANEL_BODY_PAD: f32 = 8.0;
+
+fn code_panel_height(rows: usize) -> f32 {
+    2.0 * CODE_PANEL_MARGIN
+        + 2.0
+        + CODE_PANEL_BAR_HEIGHT
+        + DETAIL_SEPARATOR
+        + 2.0 * CODE_PANEL_BODY_PAD
+        + rows as f32 * OUTPUT_LINE_HEIGHT
+}
+
+fn invocation_height(detail: &ToolDetail) -> f32 {
+    match detail {
+        ToolDetail::Output {
+            lines,
+            truncated_by,
+        } => DETAIL_SEPARATOR + code_panel_height(lines.len() + usize::from(*truncated_by > 0)),
+        _ => 0.0,
+    }
+}
+
+fn git_title(command: &str) -> Option<String> {
+    let mut words = command.split_whitespace();
+    if words.next()? != "git" {
+        return None;
+    }
+    while let Some(word) = words.next() {
+        match word {
+            "-C" | "-c" => {
+                words.next();
+            }
+            flag if flag.starts_with('-') => {}
+            subcommand => return Some(format!("Git {subcommand}")),
+        }
+    }
+    None
+}
+
+fn format_duration_ms(ms: u64) -> String {
+    if ms < 10_000 {
+        format!("{ms}ms")
+    } else {
+        format_elapsed((ms / 1000) as i64)
+    }
+}
+
+fn number_spans(line: &str) -> Vec<zeron_syntax::HighlightSpan> {
+    let mut spans = Vec::new();
+    let mut start = None;
+    for (ix, c) in line
+        .char_indices()
+        .chain(std::iter::once((line.len(), ' ')))
+    {
+        let in_word = c.is_ascii_alphanumeric() || c == '.';
+        match (start, in_word) {
+            (None, true) => start = Some(ix),
+            (Some(from), false) => {
+                start = None;
+                let word = line[from..ix].trim_end_matches('.');
+                let digits = word
+                    .find(|c: char| !(c.is_ascii_digit() || c == '.'))
+                    .unwrap_or(word.len());
+                let unit = &word[digits..];
+                if word.starts_with(|c: char| c.is_ascii_digit())
+                    && !word[..digits].contains("..")
+                    && unit.len() <= 2
+                    && unit.chars().all(|c| c.is_ascii_alphabetic())
+                {
+                    spans.push(zeron_syntax::HighlightSpan {
+                        range: from..from + word.len(),
+                        kind: zeron_syntax::HighlightKind::Number,
+                    });
+                }
+            }
+            _ => {}
+        }
+    }
+    spans
+}
+
+fn invocation_lang(call: &ToolCall) -> Option<Lang> {
+    match call {
+        ToolCall::Exec { .. } => Some(Lang::Bash),
+        ToolCall::Mcp { input: Some(_), .. } => Some(Lang::Json),
+        _ => None,
+    }
+}
+
+fn copy_pill(
+    id: SharedString,
+    copied: bool,
+    on_copy: impl Fn(&gpui::ClickEvent, &mut Window, &mut gpui::App) + 'static,
+    theme: &Theme,
+) -> gpui::Stateful<gpui::Div> {
+    div()
+        .id(id)
+        .h(px(20.0))
+        .px(px(6.0))
+        .flex()
+        .flex_none()
+        .items_center()
+        .gap(px(5.0))
+        .rounded(px(5.0))
+        .bg(theme.ink(0.06))
+        .text_size(px(11.0))
+        .text_color(theme.text_muted)
+        .cursor_pointer()
+        .hover(|style| style.bg(theme.ink(0.1)).text_color(theme.text))
+        .on_click(on_copy)
+        .child(
+            crate::icons::icon(if copied {
+                crate::icons::CHECK
+            } else {
+                crate::icons::COPY
+            })
+            .size(px(12.0))
+            .text_color(theme.text_muted),
+        )
+        .child(SharedString::from(if copied { "Copied" } else { "Copy" }))
+}
+
+fn invocation_panel(
+    lines: &[SharedString],
+    truncated_by: usize,
+    lang: Option<Lang>,
+    highlight: Option<&zeron_syntax::HighlightedDocument>,
+    copied: bool,
+    on_copy: impl Fn(&gpui::ClickEvent, &mut Window, &mut gpui::App) + 'static,
+    selection_key: &str,
+    theme: &Theme,
+) -> AnyElement {
+    let rows = lines.len() + usize::from(truncated_by > 0);
+    let mono = gpui::font(theme.font_mono.clone());
+    let prompt = lang == Some(Lang::Bash);
+    let bar = div()
+        .h(px(CODE_PANEL_BAR_HEIGHT))
+        .flex_none()
+        .flex()
+        .items_center()
+        .justify_between()
+        .px(px(10.0))
+        .bg(crate::theme::ink(0.04))
+        .child(match lang {
+            Some(lang) => crate::file_icons::icon(
+                crate::file_icons::FileIconIdentity::file(if lang == Lang::Bash {
+                    "command.sh"
+                } else {
+                    "input.json"
+                }),
+                theme.appearance,
+            )
+            .size(px(14.0))
+            .into_any_element(),
+            None => div().into_any_element(),
+        })
+        .child(copy_pill(
+            SharedString::from(format!("{selection_key}-copy")),
+            copied,
+            on_copy,
+            theme,
+        ));
+    let body = div()
+        .flex_1()
+        .min_h_0()
+        .min_w_0()
+        .py(px(CODE_PANEL_BODY_PAD))
+        .px(px(10.0))
+        .font_family(theme.font_mono.clone())
+        .text_size(px(TOOL_TEXT_SIZE))
+        .children(lines.iter().enumerate().map(|(line_ix, line)| {
+            let spans = highlight
+                .and_then(|document| document.lines.get(line_ix))
+                .filter(|spans| spans.last().is_none_or(|span| span.range.end <= line.len()))
+                .map_or(&[][..], Vec::as_slice);
+            let runs = render::runs_for_syntax_line_with_plain(
+                line,
+                spans,
+                &mono,
+                theme.text.opacity(0.9),
+                theme,
+            );
+            div()
+                .h(px(OUTPUT_LINE_HEIGHT))
+                .w_full()
+                .min_w_0()
+                .flex()
+                .items_center()
+                .when(prompt, |row| {
+                    row.child(
+                        div()
+                            .flex_none()
+                            .w(px(14.0))
+                            .text_color(theme.text_faint)
+                            .when(line_ix == 0, |mark| mark.child("$")),
+                    )
+                })
+                .when(!line.is_empty(), |row| {
+                    row.child(
+                        div()
+                            .w_full()
+                            .min_w_0()
+                            .overflow_hidden()
+                            .whitespace_nowrap()
+                            .child(render::selectable_text_element(
+                                format!("{selection_key}-{line_ix}").into(),
+                                line.clone(),
+                                runs,
+                                theme.selection,
+                            )),
+                    )
+                })
+        }))
+        .when(truncated_by > 0, |body| {
+            body.child(more_lines_row(truncated_by, theme))
+        });
+    div()
+        .h(px(code_panel_height(rows)))
+        .w_full()
+        .min_w_0()
+        .flex_none()
+        .p(px(CODE_PANEL_MARGIN))
+        .child(
+            div()
+                .h_full()
+                .w_full()
+                .min_w_0()
+                .flex()
+                .flex_col()
+                .overflow_hidden()
+                .rounded(px(8.0))
+                .border_1()
+                .border_color(crate::theme::hairline(0.08))
+                .child(bar)
+                .child(
+                    div()
+                        .h(px(DETAIL_SEPARATOR))
+                        .flex_none()
+                        .bg(crate::theme::hairline(0.06)),
+                )
+                .child(body),
+        )
+        .into_any_element()
+}
+
 /// Analytic height an open detail adds to its chip's card (separator + body)
 /// — output blocks by line count, diff blocks via the changes pane's own
 /// [`crate::changes::body_height`]. The chip's own [`CHIP_HEIGHT`] is already
@@ -2159,6 +2480,7 @@ pub fn detail_height(detail: &ToolDetail) -> f32 {
         ToolDetail::Thought {
             lines,
             truncated_by,
+            ..
         } => {
             let rows = lines.len() + usize::from(*truncated_by > 0);
             rows as f32 * OUTPUT_LINE_HEIGHT + OUTPUT_BODY_PAD
@@ -2173,8 +2495,12 @@ pub fn detail_height(detail: &ToolDetail) -> f32 {
 const TOOL_IMAGE_HEIGHT: f32 = 220.0;
 const TOOL_IMAGE_MAX_WIDTH: f32 = 560.0;
 const TOOL_IMAGE_PAD: f32 = 8.0;
-/// Analytic height an open chip's image strip adds (separator + frames).
-const TOOL_IMAGE_STRIP_HEIGHT: f32 = DETAIL_SEPARATOR + TOOL_IMAGE_HEIGHT + 2.0 * TOOL_IMAGE_PAD;
+const TOOL_IMAGE_MIN_WIDTH: f32 = 160.0;
+const TOOL_IMAGE_CAPTION_HEIGHT: f32 = 26.0;
+/// Analytic height an open chip's image strip adds (separator + frames +
+/// their path captions).
+const TOOL_IMAGE_STRIP_HEIGHT: f32 =
+    DETAIL_SEPARATOR + TOOL_IMAGE_HEIGHT + TOOL_IMAGE_CAPTION_HEIGHT + 2.0 * TOOL_IMAGE_PAD;
 
 /// The open image context menu: what to copy and where it lives.
 struct ImageMenu {
@@ -2187,6 +2513,11 @@ struct ImageMenu {
 /// Spawn chips never expand, so they never preview images either.
 fn chip_has_images(tool: &ToolItem) -> bool {
     !tool.images.is_empty() && !is_spawn_link(tool)
+}
+
+fn is_image_read(tool: &ToolItem) -> bool {
+    chip_has_images(tool)
+        && matches!(&tool.call, ToolCall::ReadFile { path } if crate::tool_images::is_image_path(path))
 }
 
 /// Height of the "Show full output/diff" affordance row appended below an
@@ -3258,6 +3589,7 @@ pub struct Transcript {
     /// identity, so the virtual list must explicitly discard cached heights.
     typography_generation: u32,
     content_width: f32,
+    list_width: f32,
     /// Last global code-fence layout generation applied to this transcript.
     /// Each instance owns separate scroll handles and list measurements, so
     /// every one must reset itself after a global Fit-mode transition.
@@ -3363,6 +3695,7 @@ pub struct Transcript {
     diagram_zoom: Option<crate::image_media::MediaImage>,
     /// Expanded tool chips' image previews; freed shortly after collapse.
     tool_images: crate::tool_images::ToolImages,
+    tool_image_open: Option<Task<()>>,
     /// Right-click menu over any transcript image (Copy path / Copy image).
     image_menu: crate::popover::Popup<ImageMenu>,
     image_menu_focus: gpui::FocusHandle,
@@ -3620,6 +3953,7 @@ impl Transcript {
             rendered_rows: HashSet::new(),
             typography_generation: crate::typography::generation(cx),
             content_width: crate::settings::transcript_width(cx),
+            list_width: 0.0,
             code_fences_generation: crate::settings::code_fences_generation(cx),
             compact_mode: crate::settings::transcript_compact_mode(cx),
             compact_live_entries: HashSet::new(),
@@ -3661,6 +3995,7 @@ impl Transcript {
             diagram_worker: None,
             diagram_zoom: None,
             tool_images: Default::default(),
+            tool_image_open: None,
             image_menu: Default::default(),
             image_menu_focus: cx.focus_handle(),
             image_copy: None,
@@ -6243,11 +6578,17 @@ impl Transcript {
             let name = SharedString::from(file_badge_name(&path).to_owned());
             let width = match &thumb {
                 Thumb::Ready { aspect, .. } => {
-                    (TOOL_IMAGE_HEIGHT * aspect).clamp(48.0, TOOL_IMAGE_MAX_WIDTH)
+                    (TOOL_IMAGE_HEIGHT * aspect).clamp(TOOL_IMAGE_MIN_WIDTH, TOOL_IMAGE_MAX_WIDTH)
                 }
                 _ => TOOL_IMAGE_HEIGHT * 4.0 / 3.0,
             };
             let menu_devices = devices.clone();
+            let (open_path, open_devices) = (path.clone(), devices.clone());
+            let (copy_path, copy_devices) = (path.clone(), devices.clone());
+            let caption = SharedString::from(path.clone());
+            let copy_key = SharedString::from(format!("{chip}-img"));
+            let copied = self.copied_code.as_ref() == Some(&(copy_key.clone(), ix));
+            let ready = matches!(thumb, Thumb::Ready { .. });
             let frame = div()
                 .id(SharedString::from(format!("{chip}-img{ix}")))
                 .w(px(width))
@@ -6275,16 +6616,28 @@ impl Transcript {
                         );
                     }),
                 );
-            match thumb {
+            let framed = match thumb {
                 // Explicit dims: img layout honors intrinsic aspect over a
                 // percent height (see the attachment strip).
-                Thumb::Ready { image, .. } => frame.child(
-                    img(image)
-                        .w(px(width - 2.0))
-                        .h(px(TOOL_IMAGE_HEIGHT - 2.0))
-                        .rounded(px(7.0))
-                        .object_fit(ObjectFit::Contain),
-                ),
+                Thumb::Ready { image, .. } => frame
+                    .role(gpui::Role::Button)
+                    .cursor_pointer()
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        cx.stop_propagation();
+                        this.open_tool_image(
+                            open_path.clone(),
+                            open_devices.first().cloned(),
+                            window,
+                            cx,
+                        );
+                    }))
+                    .child(
+                        img(image)
+                            .w(px(width - 2.0))
+                            .h(px(TOOL_IMAGE_HEIGHT - 2.0))
+                            .rounded(px(7.0))
+                            .object_fit(ObjectFit::Contain),
+                    ),
                 Thumb::Loading => frame
                     .text_size(px(TOOL_TEXT_SIZE))
                     .text_color(theme.text_faint)
@@ -6297,7 +6650,47 @@ impl Transcript {
                     .text_color(theme.text_faint)
                     .child("Image unavailable")
                     .child(div().max_w_full().truncate().child(name)),
-            }
+            };
+            div()
+                .w(px(width))
+                .flex_none()
+                .flex()
+                .flex_col()
+                .child(framed)
+                .child(
+                    div()
+                        .h(px(TOOL_IMAGE_CAPTION_HEIGHT))
+                        .flex_none()
+                        .flex()
+                        .items_end()
+                        .gap(px(6.0))
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .truncate()
+                                .font_family(theme.font_mono.clone())
+                                .text_size(px(11.0))
+                                .text_color(theme.text_muted)
+                                .child(caption),
+                        )
+                        .when(ready, |row| {
+                            row.child(copy_pill(
+                                SharedString::from(format!("{copy_key}{ix}-copy")),
+                                copied,
+                                cx.listener(move |this, _, _, cx| {
+                                    cx.stop_propagation();
+                                    this.copy_image(
+                                        copy_path.clone(),
+                                        copy_devices.to_vec(),
+                                        cx,
+                                    );
+                                    this.mark_code_copied(copy_key.clone(), ix, cx);
+                                }),
+                                theme,
+                            ))
+                        }),
+                )
         });
         div()
             .h(px(TOOL_IMAGE_STRIP_HEIGHT))
@@ -6313,7 +6706,7 @@ impl Transcript {
             .child(
                 div()
                     .id(SharedString::from(format!("{chip}-images")))
-                    .h(px(TOOL_IMAGE_HEIGHT + 2.0 * TOOL_IMAGE_PAD))
+                    .h(px(TOOL_IMAGE_HEIGHT + TOOL_IMAGE_CAPTION_HEIGHT + 2.0 * TOOL_IMAGE_PAD))
                     .py(px(TOOL_IMAGE_PAD))
                     .px(px(TOOL_IMAGE_PAD))
                     .flex()
@@ -6323,6 +6716,45 @@ impl Transcript {
                     .children(frames),
             )
             .into_any_element()
+    }
+
+    fn open_tool_image(
+        &mut self,
+        path: String,
+        device: Option<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(engine) = self.state.read(cx).engine().cloned() else {
+            return;
+        };
+        let local = self.state.read(cx).local_device_id.clone();
+        let target = device.filter(|device| local.as_deref() != Some(device.as_str()));
+        self.tool_image_open = Some(cx.spawn_in(window, async move |this, cx| {
+            let executor = cx.background_executor().clone();
+            let Some(loaded) = crate::attachments::read_attachment_image(
+                &engine,
+                &executor,
+                target.as_deref(),
+                &path,
+                None,
+            )
+            .await
+            else {
+                return;
+            };
+            this.update_in(cx, |this, window, cx| {
+                this.close_diagram_zoom(cx);
+                this.attachment_preview_return_focus = window.focused(cx);
+                this.attachment_preview = Some(crate::attachments::PreviewImage::new(
+                    loaded.name,
+                    loaded.image,
+                ));
+                window.focus(&this.attachment_preview_focus, cx);
+                cx.notify();
+            })
+            .ok();
+        }));
     }
 
     /// Open the image menu at the pointer. `devices` are the candidate owners
@@ -7990,23 +8422,27 @@ impl Transcript {
                 let row_key = row_key.clone();
                 entity
                     .update(cx, |this, cx| {
-                        this.copied_code = Some((row_key, ix));
-                        this.copied_clear = Some(cx.spawn(async move |this, cx| {
-                            cx.background_executor()
-                                .timer(Duration::from_millis(1200))
-                                .await;
-                            this.update(cx, |this, cx| {
-                                this.copied_code = None;
-                                this.copied_clear = None;
-                                cx.notify();
-                            })
-                            .ok();
-                        }));
-                        cx.notify();
+                        this.mark_code_copied(row_key, ix, cx);
                     })
                     .ok();
             });
         render::CopyUi { handler, copied_ix }
+    }
+
+    fn mark_code_copied(&mut self, key: SharedString, ix: usize, cx: &mut Context<Self>) {
+        self.copied_code = Some((key, ix));
+        self.copied_clear = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(Duration::from_millis(1200))
+                .await;
+            this.update(cx, |this, cx| {
+                this.copied_code = None;
+                this.copied_clear = None;
+                cx.notify();
+            })
+            .ok();
+        }));
+        cx.notify();
     }
 
     /// Interactive layout/scroll plumbing for one agent Markdown fence. The
@@ -8236,7 +8672,11 @@ impl Transcript {
         // always answers "what exactly was this call?", output or not.
         let invocations: Vec<Option<Arc<ToolDetail>>> = tools
             .iter()
-            .map(|tool| tool.invocation.clone().filter(|_| !is_spawn_link(tool)))
+            .map(|tool| {
+                tool.invocation
+                    .clone()
+                    .filter(|_| !is_spawn_link(tool) && !is_image_read(tool))
+            })
             .collect();
         // Fetch affordance under each open detail whose full payload is still
         // sidecar-only: `(ref, label)`. Diff offered first (the richer
@@ -8323,6 +8763,67 @@ impl Transcript {
                     && fold.open.unwrap_or(default_open)
             })
             .collect();
+        let size = px(TOOL_TEXT_SIZE);
+        let text_system = cx.text_system().clone();
+        let sans = gpui::font(theme.font_sans_fixed.clone());
+        let mut semibold = sans.clone();
+        semibold.weight = gpui::FontWeight::SEMIBOLD;
+        let fonts = [
+            text_system.resolve_font(&sans),
+            text_system.resolve_font(&semibold),
+            text_system.resolve_font(&gpui::font(theme.font_mono.clone())),
+        ];
+        let advances = RefCell::new(HashMap::<(char, usize), f32>::new());
+        let advance = |c: char, style: &InlineStyle| -> f32 {
+            let slot = if style.code {
+                2
+            } else if style.bold {
+                1
+            } else {
+                0
+            };
+            *advances.borrow_mut().entry((c, slot)).or_insert_with(|| {
+                text_system
+                    .advance(fonts[slot], size, c)
+                    .map_or(f32::from(size) * 0.6, |advance| f32::from(advance.width))
+            })
+        };
+        let column = detail_column(self.content_width, self.list_width);
+        let call_cols = call_wrap_cols(
+            column,
+            f32::from(text_system.ch_advance(fonts[2], size).unwrap_or(size * 0.6)),
+        );
+        let thought_wrap = ThoughtWrap {
+            budget: column - THOUGHT_CHROME,
+            width: &advance,
+        };
+        let details: Vec<Option<Arc<ToolDetail>>> = details
+            .into_iter()
+            .zip(tools.iter())
+            .enumerate()
+            .map(|(ix, (detail, tool))| {
+                if (detail_opens[ix] || detail_folds[ix].toggled_at.is_some())
+                    && let Some(ToolDetail::Thought { tree, .. }) = detail.as_deref()
+                {
+                    return thought_detail(tree, !tool.resolved, &thought_wrap).map(Arc::new);
+                }
+                detail
+            })
+            .collect();
+        let invocations: Vec<Option<Arc<ToolDetail>>> = invocations
+            .into_iter()
+            .zip(tools.iter())
+            .enumerate()
+            .map(|(ix, (invocation, tool))| {
+                if invocation.is_some()
+                    && (detail_opens[ix] || detail_folds[ix].toggled_at.is_some())
+                {
+                    call_block_cols(&tool.call, call_cols).map(Arc::new)
+                } else {
+                    invocation
+                }
+            })
+            .collect();
         // Image previews exist only while their chip's body is mounted (open,
         // or tweening shut). Every other chip releases its pixels.
         let chip_images = self.hold_tool_images(row_id, tools, &detail_opens, &detail_folds, cx);
@@ -8334,6 +8835,30 @@ impl Transcript {
                     .as_deref()
                     .filter(|_| detail_opens[ix])
                     .and_then(|detail| self.tool_diff_highlight_for(row_id, ix, detail, cx))
+            })
+            .collect();
+        let invocation_highlights: Vec<Option<Arc<zeron_syntax::HighlightedDocument>>> = tools
+            .iter()
+            .enumerate()
+            .map(|(ix, tool)| {
+                let lang = invocation_lang(&tool.call)?;
+                let Some(ToolDetail::Output { lines, .. }) =
+                    invocations[ix].as_deref().filter(|_| detail_opens[ix])
+                else {
+                    return None;
+                };
+                let source = lines
+                    .iter()
+                    .map(|line| line.as_ref())
+                    .collect::<Vec<&str>>()
+                    .join("\n");
+                self.highlights.request(
+                    format!("{row_id}#tool-call-{ix}").into(),
+                    0,
+                    lang,
+                    &source,
+                    cx,
+                )
             })
             .collect();
         let base_row_height = CHIP_HEIGHT;
@@ -8349,7 +8874,7 @@ impl Transcript {
                 |(((((detail, invocation), affordance), open), fold), tool)| {
                     let target = if *open {
                         base_row_height
-                            + invocation.as_deref().map_or(0.0, detail_height)
+                            + invocation.as_deref().map_or(0.0, invocation_height)
                             + if chip_has_images(tool) {
                                 TOOL_IMAGE_STRIP_HEIGHT
                             } else {
@@ -8650,7 +9175,13 @@ impl Transcript {
                         .flex()
                         .flex_col()
                         .overflow_hidden();
-                    if let Some(invocation) = invocation.as_deref() {
+                    if let Some(ToolDetail::Output {
+                        lines,
+                        truncated_by,
+                    }) = invocation.as_deref()
+                    {
+                        let copy_key = key.clone();
+                        let copy_text = call_text(&tool.call);
                         panel = panel
                             .child(
                                 div()
@@ -8658,7 +9189,22 @@ impl Transcript {
                                     .flex_none()
                                     .bg(crate::theme::hairline(0.06)),
                             )
-                            .child(detail_body(invocation, None, &format!("{key}-call"), theme));
+                            .child(invocation_panel(
+                                lines,
+                                *truncated_by,
+                                invocation_lang(&tool.call),
+                                invocation_highlights[ix].as_deref(),
+                                self.copied_code.as_ref().is_some_and(|(id, _)| *id == key),
+                                cx.listener(move |this, _, _, cx| {
+                                    cx.stop_propagation();
+                                    cx.write_to_clipboard(ClipboardItem::new_string(
+                                        copy_text.clone(),
+                                    ));
+                                    this.mark_code_copied(copy_key.clone(), 0, cx);
+                                }),
+                                &format!("{key}-call"),
+                                theme,
+                            ));
                     }
                     if let Some(images) = chip_images[ix].clone() {
                         panel = panel.child(self.render_tool_image_strip(&key, images, theme, cx));
@@ -8669,7 +9215,9 @@ impl Transcript {
                                 div()
                                     .h(px(DETAIL_SEPARATOR))
                                     .flex_none()
-                                    .bg(crate::theme::hairline(0.06)),
+                                    .when(invocation.is_none(), |line| {
+                                        line.bg(crate::theme::hairline(0.06))
+                                    }),
                             )
                             .child(detail_body(
                                 detail,
@@ -9345,8 +9893,28 @@ fn tool_icon_path(call: &ToolCall) -> &'static str {
         ToolCall::WebFetch { .. } | ToolCall::WebSearch { .. } => crate::icons::GLOBAL,
         ToolCall::Todo { .. } => crate::icons::CHECKLIST,
         call if is_agent_call(call) => crate::icons::BOT,
-        ToolCall::Unknown { name, .. } if name == "Wait for agents" => crate::icons::BOT,
-        ToolCall::Mcp { .. } | ToolCall::Unknown { .. } => crate::icons::WIDGET,
+        call if call.skill_invocation().is_some() => crate::icons::MAGIC_STICK_3,
+        ToolCall::Unknown { name, .. } => match name.as_str() {
+            "Wait for agents" | "Send agent message" | "Close agent" | "Resume agent"
+            | "SendMessage" | "ListAgents" | "Workflow" => crate::icons::BOT,
+            "AskUserQuestion" => crate::icons::CHAT_ROUND_LINE,
+            "EnterPlanMode" | "ExitPlanMode" => crate::icons::LIST,
+            "TaskStop" | "KillShell" => crate::icons::STOP,
+            "TaskOutput" | "BashOutput" => crate::icons::TERMINAL,
+            "Monitor" => crate::icons::EYE,
+            "ScheduleWakeup" | "CronCreate" | "CronList" | "CronDelete" => {
+                crate::icons::CLOCK_CIRCLE
+            }
+            "NotebookEdit" | "MultiEdit" => crate::icons::PEN,
+            "ToolSearch" => crate::icons::MAGNIFER,
+            "EnterWorktree" | "ExitWorktree" => crate::icons::WORKTREE,
+            "TaskCreate" | "TaskUpdate" | "TaskGet" | "TaskList" => crate::icons::CHECKLIST,
+            "Generate image" => crate::icons::GALLERY,
+            name if name.starts_with("Agent control: ") => crate::icons::BOT,
+            name if name.starts_with("Delete: ") => crate::icons::TRASH_BIN_MINIMALISTIC,
+            _ => crate::icons::WIDGET,
+        },
+        ToolCall::Mcp { .. } => crate::icons::WIDGET,
     }
 }
 
@@ -9474,7 +10042,13 @@ fn detail_body(
                 row.child(selectable(
                     line_ix,
                     line.clone(),
-                    plain(line, theme.text_faint),
+                    render::runs_for_syntax_line_with_plain(
+                        line,
+                        &number_spans(line),
+                        &gpui::font(theme.font_mono.clone()),
+                        theme.text_faint,
+                        theme,
+                    ),
                 ))
             }))
             .when(*truncated_by > 0, |block| {
@@ -9484,6 +10058,7 @@ fn detail_body(
         ToolDetail::Thought {
             lines,
             truncated_by,
+            ..
         } => body
             .py(px(6.0))
             .px(px(10.0))
@@ -9634,13 +10209,29 @@ fn chip_header_row(
     let (label, detail) = match tool.kind {
         ToolItemKind::Thought => ("Thought process", String::new()),
         ToolItemKind::Note => ("Wrote", note_chip_detail(tool)),
-        ToolItemKind::Call => tool_chip_content(&tool.call),
+        ToolItemKind::Call => match tool_chip_content(&tool.call) {
+            ("Run", detail) => match git_title(&detail) {
+                Some(title) => ("git", title),
+                None => ("bash", detail),
+            },
+            content => content,
+        },
     };
+    let skill = matches!(tool.kind, ToolItemKind::Call)
+        .then(|| tool.call.skill_invocation())
+        .flatten();
     let file_path = match &tool.call {
         ToolCall::ReadFile { path }
         | ToolCall::WriteFile { path, .. }
         | ToolCall::EditFile { path, .. }
         | ToolCall::ApplyPatch { path: Some(path) } => Some(path.as_str()),
+        ToolCall::Unknown {
+            name,
+            input: Some(input),
+        } if matches!(name.as_str(), "NotebookEdit" | "MultiEdit") => input
+            .get("notebook_path")
+            .or_else(|| input.get("file_path"))
+            .and_then(serde_json::Value::as_str),
         _ => None,
     };
     let open_file = file_path
@@ -9669,29 +10260,23 @@ fn chip_header_row(
         .px(px(8.0))
         .text_size(px(TOOL_LABEL_SIZE))
         .line_height(px(TOOL_LABEL_LINE_HEIGHT))
-        .child(
-            div()
-                .size(px(18.0))
-                .flex_none()
-                .rounded(px(5.0))
-                .bg(crate::theme::ink(0.08))
-                .flex()
-                .items_center()
-                .justify_center()
-                .child(
-                    crate::icons::icon(match tool.kind {
-                        ToolItemKind::Thought => crate::icons::CHAT_ROUND_LINE,
-                        ToolItemKind::Note => crate::icons::PEN,
-                        ToolItemKind::Call => tool_icon_path(&tool.call),
-                    })
-                    .size(px(12.0))
-                    .text_color(if failed {
-                        theme.danger
-                    } else {
-                        theme.text_muted
-                    }),
-                ),
-        )
+        .child(if label == "git" {
+            crate::file_icons::icon(
+                crate::file_icons::FileIconIdentity::file(".gitignore"),
+                theme.appearance,
+            )
+            .size(px(14.0))
+            .into_any_element()
+        } else {
+            crate::icons::icon(match tool.kind {
+                ToolItemKind::Thought => crate::icons::CHAT_ROUND_LINE,
+                ToolItemKind::Note => crate::icons::PEN,
+                ToolItemKind::Call => tool_icon_path(&tool.call),
+            })
+            .size(px(14.0))
+            .text_color(if failed { theme.danger } else { theme.accent })
+            .into_any_element()
+        })
         .child(
             div()
                 .flex_none()
@@ -9699,7 +10284,7 @@ fn chip_header_row(
                 .flex()
                 .items_center()
                 .when(label_is_title, |label| {
-                    label.font_weight(gpui::FontWeight::MEDIUM)
+                    label.font_weight(gpui::FontWeight::SEMIBOLD)
                 })
                 .text_color(if label_is_title {
                     title_color
@@ -9708,13 +10293,17 @@ fn chip_header_row(
                 } else {
                     theme.text_muted
                 })
-                .child(SharedString::from(label)),
+                .child(SharedString::from(if label_is_title {
+                    label.to_owned()
+                } else {
+                    label.to_lowercase()
+                })),
         )
         .child(
             div()
                 .flex_1()
                 .min_w_0()
-                .h(px(if file_path.is_some() {
+                .h(px(if file_path.is_some() || skill.is_some() {
                     22.0
                 } else {
                     TOOL_LABEL_LINE_HEIGHT
@@ -9722,7 +10311,7 @@ fn chip_header_row(
                 .flex()
                 .items_center()
                 .truncate()
-                .font_weight(gpui::FontWeight::MEDIUM)
+                .font_weight(gpui::FontWeight::SEMIBOLD)
                 .text_color(title_color)
                 .child(if let Some(path) = file_path {
                     let badge = div()
@@ -9775,6 +10364,37 @@ fn chip_header_row(
                                 .into_any_element()
                         });
                     crate::frost::frosted(5.0, 16.0, badge).into_any_element()
+                } else if let Some((skill, args)) = skill {
+                    div()
+                        .min_w_0()
+                        .flex()
+                        .items_center()
+                        .gap(px(8.0))
+                        .child(crate::frost::frosted(
+                            5.0,
+                            16.0,
+                            div()
+                                .min_w_0()
+                                .h(px(22.0))
+                                .flex()
+                                .items_center()
+                                .rounded(px(5.0))
+                                .bg(theme.ink(0.06))
+                                .px(px(6.0))
+                                .truncate()
+                                .child(SharedString::from(skill.to_owned())),
+                        ))
+                        .when(!args.is_empty(), |row| {
+                            row.child(
+                                div()
+                                    .min_w_0()
+                                    .truncate()
+                                    .font_weight(gpui::FontWeight::NORMAL)
+                                    .text_color(theme.text_muted)
+                                    .child(SharedString::from(args.to_owned())),
+                            )
+                        })
+                        .into_any_element()
                 } else {
                     div()
                         .min_w_0()
@@ -9807,30 +10427,39 @@ fn chip_header_row(
                 cx,
             )))
         })
+        .when_some(tool.duration_ms, |row, ms| {
+            row.child(
+                div()
+                    .flex_none()
+                    .text_size(px(11.0))
+                    .text_color(theme.text_faint)
+                    .child(SharedString::from(format_duration_ms(ms))),
+            )
+        })
         .when_some(trail, |row, trail| {
-            let tile = div()
-                .size(px(18.0))
-                .flex_none()
-                .rounded(px(5.0))
-                .bg(crate::theme::ink(0.06))
-                .flex()
-                .items_center()
-                .justify_center();
             row.child(match trail {
-                ChipTrail::Chevron { open } => tile.child(
-                    crate::icons::icon(if open {
-                        crate::icons::ALT_ARROW_DOWN
-                    } else {
-                        crate::icons::ALT_ARROW_RIGHT
-                    })
-                    .size(px(12.0))
-                    .text_color(theme.text_faint),
-                ),
-                ChipTrail::OpenArrow => tile.child(
-                    crate::icons::icon(crate::icons::ARROW_UP_RIGHT)
-                        .size(px(11.0))
-                        .text_color(theme.text_muted.opacity(0.8)),
-                ),
+                ChipTrail::Chevron { open } => crate::icons::icon(if open {
+                    crate::icons::ALT_ARROW_UP
+                } else {
+                    crate::icons::ALT_ARROW_DOWN
+                })
+                .size(px(14.0))
+                .text_color(theme.text_muted)
+                .into_any_element(),
+                ChipTrail::OpenArrow => div()
+                    .size(px(18.0))
+                    .flex_none()
+                    .rounded(px(5.0))
+                    .bg(crate::theme::ink(0.06))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(
+                        crate::icons::icon(crate::icons::ARROW_UP_RIGHT)
+                            .size(px(11.0))
+                            .text_color(theme.text_muted.opacity(0.8)),
+                    )
+                    .into_any_element(),
             })
         })
 }
@@ -10154,6 +10783,7 @@ impl Render for Transcript {
             let mut diagrams = self.diagrams.borrow_mut();
             let mut released = diagrams.begin_frame(crate::theme::style_generation());
             let list_width = f32::from(self.list.viewport_bounds().size.width);
+            self.list_width = list_width;
             let column = if list_width > 0.0 {
                 self.content_width.min(list_width)
             } else {
@@ -12554,7 +13184,7 @@ mod tests {
     }
 
     fn thought_of(text: &str) -> Vec<Vec<InlineRun>> {
-        thought_lines(&parse_full(text))
+        thought_lines(&parse_full(text), &THOUGHT_COLS)
     }
 
     fn line_chars(line: &[InlineRun]) -> usize {
@@ -12682,6 +13312,7 @@ mod tests {
             subagent_ref: None,
             subagent_status: None,
             subagent_tail: None,
+            duration_ms: None,
         }
     }
 
@@ -12804,6 +13435,7 @@ mod tests {
             subagent_ref: Some(format!("chat--sub--{id}")),
             subagent_status: Some(SubagentStatus::Running),
             subagent_tail: None,
+            duration_ms: None,
         }
     }
 
@@ -15435,7 +16067,7 @@ mod tests {
         assert_eq!(new_text.as_deref(), Some("only\n"));
 
         // Output: verbatim lines (indentation intact), counted-tail cap.
-        let output = (0..40)
+        let output = (0..OUTPUT_DETAIL_MAX_LINES + 16)
             .map(|i| format!("    indented {i}"))
             .collect::<Vec<_>>()
             .join("\n");
@@ -15447,7 +16079,7 @@ mod tests {
             panic!("expected output detail");
         };
         assert_eq!(lines.len(), OUTPUT_DETAIL_MAX_LINES);
-        assert_eq!(truncated_by, 40 - OUTPUT_DETAIL_MAX_LINES);
+        assert_eq!(truncated_by, 16);
         assert_eq!(lines[0].as_ref(), "    indented 0");
 
         // A minified megabyte line is cut on a char boundary before shaping,
@@ -15485,6 +16117,7 @@ mod tests {
             subagent_ref: None,
             subagent_status: None,
             subagent_tail: None,
+            duration_ms: None,
             kind: ToolItemKind::Call,
             images: Arc::new([]),
         };
@@ -15505,6 +16138,7 @@ mod tests {
             subagent_ref: None,
             subagent_status: None,
             subagent_tail: None,
+            duration_ms: None,
             kind: ToolItemKind::Call,
             images: Arc::new([]),
         };
@@ -15541,6 +16175,7 @@ mod tests {
                 subagent_ref: None,
                 subagent_status: None,
                 subagent_tail: None,
+                duration_ms: None,
                 kind: ToolItemKind::Call,
                 images: Arc::new([]),
             },
@@ -15559,6 +16194,7 @@ mod tests {
                 subagent_ref: None,
                 subagent_status: None,
                 subagent_tail: None,
+                duration_ms: None,
                 kind: ToolItemKind::Call,
                 images: Arc::new([]),
             },
@@ -15575,6 +16211,7 @@ mod tests {
                 subagent_ref: None,
                 subagent_status: None,
                 subagent_tail: None,
+                duration_ms: None,
                 kind: ToolItemKind::Call,
                 images: Arc::new([]),
             },
@@ -15730,6 +16367,7 @@ mod tests {
             subagent_ref: None,
             subagent_status: None,
             subagent_tail: None,
+            duration_ms: None,
             kind: ToolItemKind::Call,
             images: Arc::new([]),
         };
@@ -15853,7 +16491,36 @@ mod tests {
         assert_eq!(lines.len(), 3);
         assert!(lines.iter().all(|l| l.chars().count() <= CALL_WRAP_COLS));
 
-        // MCP input pretty-prints under the `server · tool` line.
+        assert_eq!(call_wrap_cols(detail_column(736.0, 0.0), 8.0), 83);
+        assert_eq!(call_wrap_cols(detail_column(1200.0, 2000.0), 8.0), 141);
+        assert_eq!(call_wrap_cols(detail_column(736.0, 496.0), 8.0), 41);
+        let half = |c: char, _: &InlineStyle| if c == 'i' { 0.5 } else { 1.0 };
+        let narrow = ThoughtWrap {
+            budget: 20.0,
+            width: &half,
+        };
+        let tree = Arc::new(parse_full(&"iiii ".repeat(16)));
+        let Some(ToolDetail::Thought { lines, .. }) = thought_detail(&tree, false, &narrow) else {
+            panic!("expected a thought block")
+        };
+        assert_eq!(lines.len(), 3);
+        assert!(lines.iter().all(|line| {
+            line.iter()
+                .map(|run| narrow.text(&run.text, &run.style))
+                .sum::<f32>()
+                <= 20.0
+        }));
+        let Some(ToolDetail::Output { lines, .. }) = call_block_cols(
+            &ToolCall::Exec {
+                command: "x".repeat(300),
+            },
+            141,
+        ) else {
+            panic!("expected an output block")
+        };
+        assert_eq!(lines.len(), 3);
+
+        // MCP input pretty-prints as JSON; the header already names the tool.
         let Some(ToolDetail::Output { lines, .. }) = call_block(&ToolCall::Mcp {
             server: "gh".into(),
             tool: "issues".into(),
@@ -15861,7 +16528,7 @@ mod tests {
         }) else {
             panic!("expected an output block")
         };
-        assert_eq!(lines[0].as_ref(), "gh · issues");
+        assert_eq!(lines[0].as_ref(), "{");
         assert!(lines.iter().any(|l| l.contains("\"repo\": \"zeron\"")));
 
         // Todos list one item per line with checkbox state.
@@ -16059,6 +16726,34 @@ mod tests {
         assert_ne!(flavour_word(seed, 0), flavour_word(seed, 7));
         // Deterministic per chat; different chats usually differ in phase.
         assert_eq!(flavour_word(seed, 3), flavour_word(seed, 3));
+    }
+
+    #[test]
+    fn git_commands_get_a_git_title() {
+        assert_eq!(git_title("git commit -m x"), Some("Git commit".into()));
+        assert_eq!(git_title("git -C repo status"), Some("Git status".into()));
+        assert_eq!(git_title("cargo test"), None);
+        assert_eq!(git_title("git"), None);
+    }
+
+    #[test]
+    fn output_numbers_are_spanned_but_hashes_are_not() {
+        let spans = |line: &str| {
+            number_spans(line)
+                .into_iter()
+                .map(|span| line[span.range].to_owned())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(spans("Checked 34 files in 4.2s"), vec!["34", "4.2s"]);
+        assert_eq!(spans("> beautiful-chat@0.1.0 typecheck"), vec!["0.1.0"]);
+        assert_eq!(spans("[main 421f5e8] feat"), Vec::<String>::new());
+        assert_eq!(spans("done."), Vec::<String>::new());
+    }
+
+    #[test]
+    fn tool_durations_read_as_milliseconds_then_elapsed() {
+        assert_eq!(format_duration_ms(812), "812ms");
+        assert_eq!(format_duration_ms(92_000), "1m 32s");
     }
 
     #[test]

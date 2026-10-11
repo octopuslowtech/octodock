@@ -126,6 +126,9 @@ struct DocPartJson {
     /// One-line live tail of the subagent's output (additive).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     subagent_tail: Option<String>,
+    /// Wall-clock tool run time in milliseconds (additive).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    duration_ms: Option<u64>,
 }
 
 /// App parts → doc part json (mirror of `toDocParts`).
@@ -170,6 +173,7 @@ fn to_doc_part(part: &MessagePart) -> Result<DocPartJson, DocError> {
             subagent_ref,
             subagent_status,
             subagent_tail,
+            duration_ms,
         } => DocPartJson {
             id: id.clone(),
             kind: "tool".into(),
@@ -193,6 +197,7 @@ fn to_doc_part(part: &MessagePart) -> Result<DocPartJson, DocError> {
                 .to_owned()
             }),
             subagent_tail: subagent_tail.clone(),
+            duration_ms: *duration_ms,
             ..Default::default()
         },
         MessagePart::Input {
@@ -251,6 +256,7 @@ fn from_doc_part(p: DocPartJson) -> MessagePart {
                     _ => None,
                 }),
                 subagent_tail: p.subagent_tail,
+                duration_ms: p.duration_ms,
             },
             None => MessagePart::Text {
                 id: p.id,
@@ -900,6 +906,9 @@ fn push_part(parts: &LoroList, part: &MessagePart) -> Result<(), DocError> {
     if let Some(subagent_tail) = &doc_part.subagent_tail {
         map.insert("subagentTail", subagent_tail.as_str())?;
     }
+    if let Some(duration_ms) = doc_part.duration_ms {
+        map.insert("durationMs", duration_ms as i64)?;
+    }
     Ok(())
 }
 
@@ -1064,6 +1073,7 @@ fn salvage_part(part: &serde_json::Value, entry_id: &str, ix: usize) -> Option<M
             subagent_ref: None,
             subagent_status: None,
             subagent_tail: None,
+            duration_ms: None,
         });
     }
     if let Some(message) = obj.get("message").and_then(|x| x.as_str()) {
@@ -1350,6 +1360,9 @@ fn update_part_fields(map: &LoroMap, part: &MessagePart) -> Result<(), DocError>
     if let Some(subagent_tail) = &doc_part.subagent_tail {
         map.insert("subagentTail", subagent_tail.as_str())?;
     }
+    if let Some(duration_ms) = doc_part.duration_ms {
+        map.insert("durationMs", duration_ms as i64)?;
+    }
     if let Some(text) = &doc_part.text {
         // Defensive path only — the fold never rewrites earlier text.
         if let Some(loro::ValueOrContainer::Container(loro::Container::Text(t))) = map.get("text") {
@@ -1570,6 +1583,7 @@ mod tests {
             subagent_ref: None,
             subagent_status: None,
             subagent_tail: None,
+            duration_ms: None,
         };
         let doc = SessionDoc::init("c1").unwrap();
         let mut w = SegmentWriter::begin(&doc, "e1", "dev", 1).unwrap();
@@ -1634,6 +1648,7 @@ mod tests {
             subagent_ref: None,
             subagent_status: None,
             subagent_tail: None,
+            duration_ms: None,
         };
         w.sync(std::slice::from_ref(&part)).unwrap();
         if let MessagePart::Tool {
@@ -1686,6 +1701,7 @@ mod tests {
             subagent_ref: None,
             subagent_status: None,
             subagent_tail: None,
+            duration_ms: None,
         };
         let parts = vec![
             tool(
@@ -1975,12 +1991,14 @@ mod tests {
                 diff_stats,
                 ..
             } => {
-                // One-liner chips: the fold drops outputs entirely (journal
-                // only), so even a direct apply_sidecar_refs call has no
+                // The bounded output rides inline, so there is no sidecar
+
                 // output to key — diff stats still get their ref (this test
+
                 // calls apply_sidecar_refs directly; the live fold no longer
+
                 // does).
-                assert_eq!(output.as_deref(), None);
+                assert_eq!(output.as_deref(), Some("total 0\nmore lines"));
                 assert_eq!(output_ref.as_deref(), None);
                 assert_eq!(*output_bytes, None);
                 assert!(diff.is_none(), "no inline diff text in the doc");
@@ -2021,6 +2039,7 @@ mod tests {
                 subagent_ref: None,
                 subagent_status: None,
                 subagent_tail: None,
+                duration_ms: Some(812),
             }],
             created_at: 1,
             device_id: "dev-a".into(),
@@ -2031,7 +2050,13 @@ mod tests {
         .unwrap();
         let entries = doc.read_entries().unwrap();
         match &entries[0].parts[0] {
-            MessagePart::Tool { output, diff, .. } => {
+            MessagePart::Tool {
+                output,
+                diff,
+                duration_ms,
+                ..
+            } => {
+                assert_eq!(*duration_ms, Some(812));
                 assert_eq!(output.as_deref(), Some("full inline output\nline 2"));
                 assert_eq!(diff.as_ref().unwrap().new_text, "new");
             }

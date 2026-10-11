@@ -19,6 +19,8 @@ pub const TOOL_OUTPUT_SUMMARY_MAX: usize = 160;
 
 pub const MCP_INPUT_MAX: usize = 4 * 1024;
 
+pub const TOOL_OUTPUT_DOC_MAX: usize = 16 * 1024;
+
 /// The doc-resident form of a tool output (docs/chat2-sync.md A1; the R2
 /// sidecar is PARKED as of 2026-08-10, so this IS the whole record in the
 /// doc — the full text survives only in the host's local run journal):
@@ -65,6 +67,34 @@ pub fn summarize_tool_output(text: &str) -> Option<String> {
     let mut out = line[..end].to_owned();
     out.push('…');
     Some(out)
+}
+
+pub fn bounded_tool_output(text: &str) -> Option<String> {
+    let kept: Vec<&str> = text
+        .lines()
+        .filter(|l| !l.trim_start().starts_with("```"))
+        .collect();
+    let stripped = kept.join("\n");
+    let stripped = stripped.trim_matches('\n').trim_end();
+    if stripped.trim().is_empty() {
+        return None;
+    }
+    if stripped.len() <= TOOL_OUTPUT_DOC_MAX {
+        return Some(stripped.to_owned());
+    }
+    let mut head_end = TOOL_OUTPUT_DOC_MAX * 3 / 4;
+    while !stripped.is_char_boundary(head_end) {
+        head_end -= 1;
+    }
+    let mut tail_start = stripped.len() - TOOL_OUTPUT_DOC_MAX / 4;
+    while !stripped.is_char_boundary(tail_start) {
+        tail_start += 1;
+    }
+    let head = &stripped[..head_end];
+    let tail = &stripped[tail_start..];
+    let head = head.rfind('\n').map_or(head, |end| &head[..end]);
+    let tail = tail.find('\n').map_or(tail, |start| &tail[start + 1..]);
+    Some(format!("{head}\n…\n{tail}"))
 }
 
 /// Per-file diff stats persisted in place of inline diff text (t3's shape).
@@ -193,6 +223,10 @@ pub enum MessagePart {
         /// its tagged text deltas (capped; display-only).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         subagent_tail: Option<String>,
+        /// Wall-clock run time in milliseconds, stamped by the host once the
+        /// result lands (additive).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        duration_ms: Option<u64>,
     },
     #[serde(rename_all = "camelCase")]
     Input {
@@ -359,6 +393,7 @@ pub fn fold_event_into_parts(out: &mut Vec<MessagePart>, event: &AgentEvent) {
                     subagent_ref: None,
                     subagent_status: None,
                     subagent_tail: None,
+                    duration_ms: None,
                 });
             }
         }
@@ -383,15 +418,10 @@ pub fn fold_event_into_parts(out: &mut Vec<MessagePart>, event: &AgentEvent) {
                 {
                     *e = *is_error;
                     *resolved = true;
-                    // Tool OUTPUTS never enter the doc (2026-08-10 product
-                    // call: chips are one-liners — name + call info — like
-                    // pre-output builds; the R2 sidecar is parked with them,
-                    // docs/chat2-sync.md A2). Full text lives only in the
-                    // host's run journal. Inline diffs die the same way:
-                    // stats only, never text. `is_error` still folds so
-                    // failed chips read as failed.
-                    let _ = output; // journal-only
-                    *out_slot = None;
+                    // Outputs enter the doc bounded by
+                    // [`bounded_tool_output`]. Inline diffs never do: stats
+                    // only, never text.
+                    *out_slot = output.as_deref().and_then(bounded_tool_output);
                     *output_bytes = None;
                     *diff_slot = None;
                     *diff_stats = diff.as_ref().map(|d| vec![diff_stat(d)]);
@@ -511,6 +541,18 @@ pub fn fold_event_into_parts(out: &mut Vec<MessagePart>, event: &AgentEvent) {
 /// caller (who knows the chat id) runs this right after each fold step, before
 /// the parts hit the doc. Idempotent. Key shape `{chatId}/{partId}` (+
 /// `.diff`) matches the edge's `/blob/{chatId}/{partId}` route.
+pub fn stamp_tool_duration(parts: &mut [MessagePart], tool_id: &str, elapsed_ms: u64) {
+    for part in parts.iter_mut() {
+        if let MessagePart::Tool {
+            id, duration_ms, ..
+        } = part
+            && id == tool_id
+        {
+            *duration_ms = Some(elapsed_ms);
+        }
+    }
+}
+
 pub fn apply_sidecar_refs(chat_id: &str, parts: &mut [MessagePart]) {
     for part in parts.iter_mut() {
         if let MessagePart::Tool {
@@ -1023,6 +1065,7 @@ mod tests {
                 subagent_ref: None,
                 subagent_status: None,
                 subagent_tail: None,
+                duration_ms: None,
             },
         ];
         let chunks = split_parts(&parts);
@@ -1109,6 +1152,21 @@ mod tests {
     }
 
     #[test]
+    fn bounded_output_keeps_head_and_tail_within_the_cap() {
+        assert_eq!(bounded_tool_output("  \n\n"), None);
+        assert_eq!(
+            bounded_tool_output("```console\nok\n```"),
+            Some("ok".into())
+        );
+        let lines: Vec<String> = (0..4000).map(|i| format!("line {i} é")).collect();
+        let bounded = bounded_tool_output(&lines.join("\n")).unwrap();
+        assert!(bounded.len() <= TOOL_OUTPUT_DOC_MAX + 8);
+        assert!(bounded.starts_with("line 0 é\n"));
+        assert!(bounded.ends_with("line 3999 é"));
+        assert!(bounded.contains("\n…\n"));
+    }
+
+    #[test]
     fn fold_strips_output_to_summary_and_diff_to_stats() {
         let mut parts = Vec::new();
         fold_event_into_parts(
@@ -1142,9 +1200,9 @@ mod tests {
                 diff_stats,
                 ..
             } => {
-                // One-liner chips: outputs never enter the doc at all
-                // (journal-only); diff text neither — stats survive.
-                assert_eq!(output.as_deref(), None);
+                // Outputs under the cap ride whole; diff text never enters
+                // the doc — stats survive.
+                assert_eq!(output.as_deref(), Some(full.trim_end()));
                 assert_eq!(*output_bytes, None);
                 assert!(diff.is_none(), "inline diff text must not enter the doc");
                 let stats = diff_stats.as_ref().unwrap();
