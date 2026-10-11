@@ -1158,6 +1158,7 @@ pub enum ShortcutId {
     NewProject,
     SwitchProject,
     OpenModelPicker,
+    PromptHistory,
     NextSession,
     PrevSession,
     ArchiveSession,
@@ -1165,7 +1166,7 @@ pub enum ShortcutId {
 }
 
 impl ShortcutId {
-    pub const ALL: [ShortcutId; 16 + JUMP_SLOTS] = [
+    pub const ALL: [ShortcutId; 17 + JUMP_SLOTS] = [
         ShortcutId::ToggleDictation,
         ShortcutId::CaptureAppshot,
         ShortcutId::RandomWallpaper,
@@ -1179,6 +1180,7 @@ impl ShortcutId {
         ShortcutId::NewProject,
         ShortcutId::SwitchProject,
         ShortcutId::OpenModelPicker,
+        ShortcutId::PromptHistory,
         ShortcutId::NextSession,
         ShortcutId::PrevSession,
         ShortcutId::ArchiveSession,
@@ -1213,6 +1215,7 @@ impl ShortcutId {
             ShortcutId::NewProject => "New project",
             ShortcutId::SwitchProject => "Switch project",
             ShortcutId::OpenModelPicker => "Open model picker",
+            ShortcutId::PromptHistory => "Open prompt history",
             ShortcutId::NextSession => "Next session or right pane tab",
             ShortcutId::PrevSession => "Previous session or right pane tab",
             ShortcutId::ArchiveSession => "Archive session",
@@ -1244,6 +1247,7 @@ impl ShortcutId {
             ShortcutId::SwitchProject if mac => "ctrl-space",
             ShortcutId::SwitchProject => "mod-space",
             ShortcutId::OpenModelPicker => "mod-/",
+            ShortcutId::PromptHistory => "mod-p",
             // Ctrl+Tab on every platform — but spelled the way THAT platform's
             // recorder spells ctrl (see `combo_from_keystroke`). Off macOS
             // ctrl IS the primary and stores as "mod"; on macOS it is its own
@@ -1294,6 +1298,7 @@ pub struct KeymapConfig {
     pub new_project: String,
     pub switch_project: String,
     pub open_model_picker: String,
+    pub prompt_history: String,
     pub next_session: String,
     pub prev_session: String,
     pub archive_session: String,
@@ -1361,6 +1366,7 @@ impl Default for KeymapConfig {
             new_project: ShortcutId::NewProject.default_combo().into(),
             switch_project: ShortcutId::SwitchProject.default_combo().into(),
             open_model_picker: ShortcutId::OpenModelPicker.default_combo().into(),
+            prompt_history: ShortcutId::PromptHistory.default_combo().into(),
             next_session: ShortcutId::NextSession.default_combo().into(),
             prev_session: ShortcutId::PrevSession.default_combo().into(),
             archive_session: ShortcutId::ArchiveSession.default_combo().into(),
@@ -1385,6 +1391,7 @@ impl KeymapConfig {
             ShortcutId::NewProject => &self.new_project,
             ShortcutId::SwitchProject => &self.switch_project,
             ShortcutId::OpenModelPicker => &self.open_model_picker,
+            ShortcutId::PromptHistory => &self.prompt_history,
             ShortcutId::NextSession => &self.next_session,
             ShortcutId::PrevSession => &self.prev_session,
             ShortcutId::ArchiveSession => &self.archive_session,
@@ -1411,6 +1418,7 @@ impl KeymapConfig {
             ShortcutId::NewProject => self.new_project = combo,
             ShortcutId::SwitchProject => self.switch_project = combo,
             ShortcutId::OpenModelPicker => self.open_model_picker = combo,
+            ShortcutId::PromptHistory => self.prompt_history = combo,
             ShortcutId::NextSession => self.next_session = combo,
             ShortcutId::PrevSession => self.prev_session = combo,
             ShortcutId::ArchiveSession => self.archive_session = combo,
@@ -1905,6 +1913,7 @@ impl UiSettings {
                         for (id, field) in [
                             (ShortcutId::ToggleFiles, "toggleFiles"),
                             (ShortcutId::SwitchProject, "switchProject"),
+                            (ShortcutId::PromptHistory, "promptHistory"),
                         ] {
                             let default = platform_combo(id.default_combo());
                             let taken = !keymap.contains_key(field)

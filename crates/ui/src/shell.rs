@@ -64,7 +64,7 @@ mod chat_dropzone;
 mod chat_dropzone_tests;
 #[cfg(test)]
 mod chat_rename_tests;
-mod command_palette;
+pub(crate) mod command_palette;
 mod file_mutations;
 mod files_panel;
 mod harness_updates;
@@ -110,6 +110,7 @@ actions!(
         ToggleCommandPalette,
         SwitchProject,
         OpenModelPicker,
+        OpenPromptHistory,
         NewSession,
         FocusPrompt,
         OpenSettings,
@@ -552,6 +553,14 @@ pub fn apply_keymap(
         KeyBinding::new(
             &valid_or_default(&keymap.open_model_picker, "mod-/"),
             OpenModelPicker,
+            None,
+        ),
+        KeyBinding::new(
+            &valid_or_default(
+                &keymap.prompt_history,
+                ShortcutId::PromptHistory.default_combo(),
+            ),
+            OpenPromptHistory,
             None,
         ),
     ]);
@@ -5697,6 +5706,7 @@ impl Shell {
     /// the keys it records before they can dispatch.
     pub(super) fn overlay_owns_keyboard(&self, cx: &App) -> bool {
         self.command_palette.is_some()
+            || self.composer.read(cx).prompt_history_open()
             || self.voice.read(cx).stage_open
             || self.section_dialog.is_some()
             || self.section_menu.is_some()
@@ -12778,6 +12788,13 @@ impl Render for Shell {
             }))
             .on_action(cx.listener(|this, _: &NextPrompt, window, cx| {
                 this.transcript_key(false, window, cx, |t, cx| t.step_prompt(true, cx));
+            }))
+            .on_action(cx.listener(|this, _: &OpenPromptHistory, _, cx| {
+                let open = this.composer.read(cx).prompt_history_open();
+                if open || (matches!(this.route, Route::Chat) && !this.overlay_owns_keyboard(cx)) {
+                    this.composer
+                        .update(cx, |composer, cx| composer.toggle_prompt_history(cx));
+                }
             }))
             .on_action(cx.listener(|this, _: &OpenModelPicker, window, cx| {
                 if matches!(this.route, Route::Chat) && !this.overlay_owns_keyboard(cx) {

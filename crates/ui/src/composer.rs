@@ -37,6 +37,7 @@ use crate::composer_markdown::{self, in_code};
 use crate::motion;
 use crate::notice::{NoticeChipIcon, notice_chip};
 use crate::pickers::Pickers;
+use crate::prompt_history::{PromptEntry, PromptHistory};
 use crate::settings::{ComposerSendBehavior, platform_combo};
 use crate::state::{AppState, Indicator};
 use crate::theme::Theme;
@@ -6015,6 +6016,9 @@ pub struct Composer {
     /// Shared scrollbar hover/drag state for both popups' floating rails —
     /// they never show at once (mutually exclusive by token shape).
     popup_bar: crate::popover::MenuScrollbarState,
+    prompt_history: Option<PromptHistoryPopup>,
+    history_scroll: gpui::ScrollHandle,
+    history_focus: FocusHandle,
     pub(crate) current_key: String,
     sending: bool,
     /// Armed immediately before a blank-canvas send selects its minted chat.
@@ -6138,6 +6142,24 @@ pub struct Composer {
     /// after the transcript lands instead of vanishing.
     voice_last: Option<VoiceFrame>,
     voice_tween: VoiceTween,
+}
+
+struct PromptHistoryPopup {
+    entries: Vec<PromptEntry>,
+    active: Option<usize>,
+    focus_pending: bool,
+}
+
+const PROMPT_HISTORY_LABEL_CHARS: usize = 240;
+const PROMPT_HISTORY_WIDTH: f32 = 720.0;
+const PROMPT_HISTORY_MAX_HEIGHT: f32 = 560.0;
+
+fn prompt_history_key(state: &AppState) -> String {
+    match state.selected_chat_row() {
+        Some(chat) => chat.space_id.clone(),
+        None => state.selected_space_row().map(|space| space.id.clone()),
+    }
+    .unwrap_or_default()
 }
 
 impl EventEmitter<ComposerEvent> for Composer {}
@@ -6330,6 +6352,9 @@ impl Composer {
             slash_scroll: gpui::ScrollHandle::new(),
             mention_scroll: gpui::ScrollHandle::new(),
             popup_bar: crate::popover::MenuScrollbarState::default(),
+            prompt_history: None,
+            history_scroll: gpui::ScrollHandle::new(),
+            history_focus: cx.focus_handle(),
             current_key,
             sending: false,
             launching_new_chat: false,
@@ -8454,6 +8479,235 @@ impl Composer {
         ))
     }
 
+    fn record_prompt(&self, text: &str, cx: &App) {
+        let state = self.state.read(cx);
+        let Some(data_dir) = state.data_dir.as_deref() else {
+            return;
+        };
+        let text = zeron_proto::attachment_mentions::demote_unattached_mentions(text, &[]);
+        let mut history = PromptHistory::load(data_dir);
+        history.record(
+            &prompt_history_key(state),
+            &text,
+            chrono::Utc::now().timestamp_millis(),
+        );
+        if let Err(err) = history.save(data_dir) {
+            tracing::warn!(error = %err, "prompt-history save failed");
+        }
+    }
+
+    pub(crate) fn prompt_history_open(&self) -> bool {
+        self.prompt_history.is_some()
+    }
+
+    pub(crate) fn toggle_prompt_history(&mut self, cx: &mut Context<Self>) {
+        if self.prompt_history.take().is_some() {
+            self.focus_pending = true;
+        } else if self.wizard.is_none() {
+            let state = self.state.read(cx);
+            let entries = state
+                .data_dir
+                .as_deref()
+                .map(|dir| {
+                    PromptHistory::load(dir)
+                        .entries(&prompt_history_key(state))
+                        .to_vec()
+                })
+                .unwrap_or_default();
+            self.history_scroll = gpui::ScrollHandle::new();
+            self.prompt_history = Some(PromptHistoryPopup {
+                active: (!entries.is_empty()).then_some(0),
+                entries,
+                focus_pending: true,
+            });
+        }
+        cx.notify();
+    }
+
+    fn close_prompt_history(&mut self, cx: &mut Context<Self>) {
+        if self.prompt_history.take().is_some() {
+            self.focus_pending = true;
+            cx.notify();
+        }
+    }
+
+    fn move_prompt_history(&mut self, delta: isize, cx: &mut Context<Self>) {
+        let Some(popup) = self.prompt_history.as_mut() else {
+            return;
+        };
+        popup.active = crate::popover::menu_step(popup.active, popup.entries.len(), delta);
+        if let Some(active) = popup.active {
+            self.history_scroll.scroll_to_item(active);
+        }
+        cx.notify();
+    }
+
+    fn accept_prompt_history(&mut self, index: usize, cx: &mut Context<Self>) {
+        let Some(popup) = self.prompt_history.take() else {
+            return;
+        };
+        if let Some(entry) = popup.entries.into_iter().nth(index) {
+            self.input
+                .update(cx, |input, cx| input.set_text(entry.text, cx));
+        }
+        self.focus_pending = true;
+        cx.notify();
+    }
+
+    fn render_prompt_history_dialog(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<gpui::AnyElement> {
+        use crate::shell::command_palette as palette;
+
+        let popup = self.prompt_history.as_mut()?;
+        if std::mem::take(&mut popup.focus_pending) {
+            window.focus(&self.history_focus, cx);
+        }
+        let viewport = window.viewport_size();
+        let theme = Theme::of(cx).for_popup();
+        let now = chrono::Utc::now();
+        let empty = popup.entries.is_empty();
+        let rows: Vec<gpui::AnyElement> = popup
+            .entries
+            .iter()
+            .enumerate()
+            .map(|(ix, entry)| {
+                let sent = chrono::DateTime::from_timestamp_millis(entry.sent_at).unwrap_or(now);
+                let label: SharedString = entry
+                    .text
+                    .split_whitespace()
+                    .collect::<Vec<_>>()
+                    .join(" ")
+                    .chars()
+                    .take(PROMPT_HISTORY_LABEL_CHARS)
+                    .collect::<String>()
+                    .into();
+                let time: SharedString = format!(
+                    "{} · {}",
+                    sent.with_timezone(&chrono::Local).format("%d/%m %H:%M"),
+                    zeron_proto::view::format_time_ago(sent, now)
+                )
+                .into();
+                crate::popover::menu_row(
+                    &theme,
+                    popup.active == Some(ix),
+                    format!("prompt-history-{ix}"),
+                )
+                .id(("prompt-history", ix))
+                .flex_none()
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.accept_prompt_history(ix, cx);
+                }))
+                .child(
+                    crate::icons::icon(crate::icons::CLOCK_CIRCLE)
+                        .size(px(16.0))
+                        .text_color(theme.text_muted),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .overflow_hidden()
+                        .truncate()
+                        .text_color(theme.text)
+                        .child(label),
+                )
+                .child(
+                    div()
+                        .flex_none()
+                        .text_size(crate::typography::ui_rems(12.0))
+                        .text_color(theme.text_muted)
+                        .child(time),
+                )
+                .into_any_element()
+            })
+            .collect();
+        let body = div()
+            .id("prompt-history-results")
+            .min_h_0()
+            .max_h(px(
+                (f32::from(viewport.height) - 180.0).clamp(100.0, PROMPT_HISTORY_MAX_HEIGHT)
+            ))
+            .overflow_y_scroll()
+            .track_scroll(&self.history_scroll)
+            .flex()
+            .flex_col()
+            .gap(px(2.0))
+            .p(px(8.0))
+            .children(rows)
+            .when(empty, |el| {
+                el.child(palette::palette_empty(
+                    &theme,
+                    "No prompts yet",
+                    "Prompts you send in this project appear here.",
+                ))
+            });
+        let body = palette::palette_results_fade(body, &self.history_scroll);
+        let shortcut = crate::settings::current(cx).keymap.prompt_history;
+        let card = palette::palette_card(
+            "prompt-history-dialog",
+            &self.history_focus,
+            viewport,
+            &theme,
+        )
+        .w(px(
+            PROMPT_HISTORY_WIDTH.min(f32::from(viewport.width) - 32.0)
+        ))
+        .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
+            match event.keystroke.key.as_str() {
+                "up" => this.move_prompt_history(-1, cx),
+                "down" => this.move_prompt_history(1, cx),
+                "enter" => {
+                    if let Some(active) = this.prompt_history.as_ref().and_then(|p| p.active) {
+                        this.accept_prompt_history(active, cx);
+                    }
+                }
+                "escape" => this.close_prompt_history(cx),
+                _ => return,
+            }
+            cx.stop_propagation();
+        }))
+        .on_mouse_down_out(cx.listener(|this, _, _, cx| this.close_prompt_history(cx)))
+        .child(
+            div()
+                .min_h(px(44.0))
+                .flex_none()
+                .px(px(16.0))
+                .py(px(8.0))
+                .flex()
+                .items_center()
+                .gap(px(10.0))
+                .border_b_1()
+                .border_color(crate::theme::hairline(0.06))
+                .child(
+                    crate::icons::icon(crate::icons::CLOCK_CIRCLE)
+                        .size(px(16.0))
+                        .text_color(theme.text_muted),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .text_size(crate::typography::ui_rems(14.0))
+                        .child("Prompt history"),
+                )
+                .child(crate::popover::kbd_hint(
+                    &theme,
+                    &crate::settings::badge_combo(&shortcut),
+                )),
+        )
+        .child(body)
+        .child(
+            palette::palette_footer()
+                .child(palette::command_key_hint(&theme, "↑ ↓", "Navigate"))
+                .child(palette::command_key_hint(&theme, "↵", "Insert"))
+                .child(palette::command_key_hint(&theme, "Esc", "Close")),
+        );
+        Some(palette::palette_overlay(viewport, card))
+    }
+
     /// The popup whose rows a scrollbar drag is moving — the tokens are
     /// mutually exclusive, so at most one exists.
     fn active_popup_scroll(&self) -> Option<gpui::ScrollHandle> {
@@ -8962,6 +9216,7 @@ impl Composer {
             taken
         });
         let typed = text.clone();
+        self.record_prompt(&typed, cx);
         // A chip for an attachment that is no longer staged must not leave as a link.
         let attached: Vec<u32> = ordinary_staged
             .iter()
@@ -11285,6 +11540,45 @@ impl Render for Composer {
                         ),
                 )
             });
+        let history_action = cx.entity().downgrade();
+        let history = if dictating {
+            None
+        } else {
+            Some(
+                div()
+                    .id("composer-prompt-history")
+                    .size(px(28.0))
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded_full()
+                    .cursor_pointer()
+                    .hover(|style| style.bg(crate::theme::ink(0.10)))
+                    .role(Role::Button)
+                    .aria_label("Prompt history")
+                    .tab_index(0)
+                    .focus_visible(|style| style.border_1().border_color(theme.accent))
+                    .tooltip(crate::settings::widgets::text_tooltip("Prompt history"))
+                    .on_click(cx.listener(|this, _, _, cx| this.toggle_prompt_history(cx)))
+                    .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
+                        if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                            cx.stop_propagation();
+                            this.toggle_prompt_history(cx);
+                        }
+                    }))
+                    .on_a11y_action(gpui::AccessibleAction::Click, move |_, _, cx| {
+                        history_action
+                            .update(cx, |this, cx| this.toggle_prompt_history(cx))
+                            .ok();
+                    })
+                    .child(
+                        crate::icons::icon(crate::icons::CLOCK_CIRCLE)
+                            .size(px(18.0))
+                            .text_color(theme.text_muted),
+                    ),
+            )
+        };
         // Staged-thumbnail strip (attachment-ui.tsx AttachmentStrip), above
         // the input inside the pill in both modes.
         let strip = self.render_attachment_strip(&theme, cx);
@@ -11426,7 +11720,8 @@ impl Render for Composer {
                                 .flex_row()
                                 .items_center()
                                 .gap(px(ACTION_UTILITY_GAP))
-                                .child(attach),
+                                .child(attach)
+                                .children(history),
                         )
                         .child(model_picker)
                         .child(
@@ -11480,7 +11775,8 @@ impl Render for Composer {
                                 .flex()
                                 .items_center()
                                 .gap(px(ACTION_UTILITY_GAP))
-                                .child(attach),
+                                .child(attach)
+                                .children(history),
                         )
                         .child(
                             div()
@@ -11560,7 +11856,8 @@ impl Render for Composer {
             // Both completion popups span the full pill width above it —
             // the file-mention and slash tokens are mutually exclusive.
             .children(self.render_file_mention_popup(&theme, cx))
-            .children(self.render_slash_popup(&theme, cx));
+            .children(self.render_slash_popup(&theme, cx))
+            .children(self.render_prompt_history_dialog(window, cx));
         // Restore the original chip-only selector treatment: destination at
         // the top-right, no surrounding surface. Cancel the column gap as the
         // row collapses so the pill never jumps at the route boundary.
@@ -11722,6 +12019,31 @@ mod attachment_chip_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[gpui::test]
+    fn prompt_history_inserts_the_picked_prompt(cx: &mut gpui::TestAppContext) {
+        let (dir, window) = composer_focus_window(cx);
+        let mut history = PromptHistory::default();
+        history.record("", "older prompt", 1);
+        history.record("", "newer prompt", 2);
+        history.save(dir.path()).unwrap();
+        window
+            .update(cx, |composer, _, cx| {
+                composer.state.update(cx, |state, _| {
+                    state.data_dir = Some(dir.path().to_path_buf());
+                });
+                composer.toggle_prompt_history(cx);
+                let popup = composer.prompt_history.as_ref().unwrap();
+                assert_eq!(popup.entries[0].text, "newer prompt");
+                assert_eq!(popup.active, Some(0));
+                composer.move_prompt_history(1, cx);
+                let active = composer.prompt_history.as_ref().unwrap().active.unwrap();
+                composer.accept_prompt_history(active, cx);
+                assert!(composer.prompt_history.is_none());
+                assert_eq!(composer.input.read(cx).text(), "older prompt");
+            })
+            .unwrap();
+    }
 
     pub(super) fn composer_focus_window(
         cx: &mut gpui::TestAppContext,
@@ -12281,7 +12603,7 @@ mod tests {
             })
             .unwrap();
             if escape {
-                cx.simulate_keystrokes(handle.into(), "escape");
+                cx.simulate_keystrokes(handle.into(), "escape escape");
             } else {
                 cx.update_window(handle.into(), |_, window, cx| {
                     window.dispatch_event(

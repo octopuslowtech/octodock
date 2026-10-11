@@ -53,6 +53,7 @@ pub mod orb;
 pub mod pickers;
 pub mod popover;
 pub mod project_actions;
+mod prompt_history;
 pub mod queue;
 pub mod rail;
 mod roll_text;

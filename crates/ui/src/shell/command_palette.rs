@@ -619,14 +619,14 @@ pub(super) fn palette_results_height(viewport: gpui::Size<Pixels>) -> f32 {
 }
 
 /// Scroll fades at whichever list edge hides rows.
-pub(super) fn palette_results_fade(
+pub(crate) fn palette_results_fade(
     body: impl IntoElement,
     scroll: &gpui::ScrollHandle,
 ) -> crate::edge_fade::EdgeFaded {
     crate::edge_fade::edge_faded(RESULTS_FADE_BAND, true, true, body).fade_overflow_y(scroll)
 }
 
-pub(super) fn palette_empty(
+pub(crate) fn palette_empty(
     theme: &Theme,
     title: impl Into<SharedString>,
     hint: impl Into<SharedString>,
@@ -645,7 +645,7 @@ pub(super) fn palette_empty(
 }
 
 /// The palette's glass card; callers add key handling and sections.
-pub(super) fn palette_card(
+pub(crate) fn palette_card(
     id: &'static str,
     focus: &FocusHandle,
     viewport: gpui::Size<Pixels>,
@@ -687,7 +687,7 @@ pub(super) fn palette_header(theme: &Theme, search: AnyElement, hint: gpui::Div)
         .child(hint)
 }
 
-pub(super) fn palette_footer() -> gpui::Div {
+pub(crate) fn palette_footer() -> gpui::Div {
     div()
         .flex_none()
         .px(px(16.0))
@@ -701,7 +701,7 @@ pub(super) fn palette_footer() -> gpui::Div {
 }
 
 /// Mount a palette card over the scrimmed window, frosted like the composer.
-pub(super) fn palette_overlay(
+pub(crate) fn palette_overlay(
     viewport: gpui::Size<Pixels>,
     card: gpui::Stateful<gpui::Div>,
 ) -> AnyElement {
@@ -728,7 +728,7 @@ pub(super) fn palette_overlay(
     .into_any_element()
 }
 
-pub(super) fn command_key_hint(theme: &Theme, keys: &str, label: &'static str) -> gpui::Div {
+pub(crate) fn command_key_hint(theme: &Theme, keys: &str, label: &'static str) -> gpui::Div {
     div()
         .flex()
         .items_center()
