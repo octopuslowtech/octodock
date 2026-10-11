@@ -111,6 +111,22 @@ pub fn active_tick(tick_rows: &[usize], top_row: usize) -> Option<usize> {
     }
 }
 
+pub fn prompt_step_target(
+    prompt_rows: &[usize],
+    top_row: usize,
+    inside_top_row: bool,
+    forward: bool,
+) -> Option<usize> {
+    if forward {
+        prompt_rows.iter().copied().find(|&row| row > top_row)
+    } else {
+        prompt_rows
+            .iter()
+            .copied()
+            .rfind(|&row| row < top_row || (inside_top_row && row == top_row))
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Fixed-footprint outline (shadcn MessageScroller "Transcript Outline")
 // ---------------------------------------------------------------------------
@@ -405,6 +421,32 @@ impl Transcript {
             })
             .ok();
         }));
+    }
+
+    fn prompt_rows(&self) -> Vec<usize> {
+        self.rows()
+            .iter()
+            .enumerate()
+            .filter(|(_, row)| matches!(row.kind, crate::transcript::RowKind::User { .. }))
+            .map(|(ix, _)| ix)
+            .collect()
+    }
+
+    pub fn scroll_to_first_prompt(&mut self, cx: &mut Context<Self>) {
+        if let Some(&row) = self.prompt_rows().first() {
+            self.scroll_to_row(row, cx);
+        }
+    }
+
+    pub fn step_prompt(&mut self, forward: bool, cx: &mut Context<Self>) {
+        let top = self.list_state().logical_scroll_top();
+        let inside_top_row = f32::from(top.offset_in_item) > 1.0;
+        let at_bottom = self.distance_from_bottom() <= crate::transcript::AT_BOTTOM_PX;
+        match prompt_step_target(&self.prompt_rows(), top.item_ix, inside_top_row, forward) {
+            Some(row) if !(forward && at_bottom) => self.scroll_to_row(row, cx),
+            _ if forward => self.jump_to_bottom(cx),
+            _ => {}
+        }
     }
 
     /// The rail element — an absolute overlay along the transcript's left edge.
@@ -703,6 +745,20 @@ mod tests {
         // Above the first tick row → first tick still active.
         assert_eq!(active_tick(&[3, 7], 1), Some(0));
         assert_eq!(active_tick(&[], 4), None);
+    }
+
+    #[test]
+    fn prompt_steps_move_between_prompt_rows() {
+        let prompts = [0, 5, 9];
+        assert_eq!(prompt_step_target(&prompts, 5, false, true), Some(9));
+        assert_eq!(prompt_step_target(&prompts, 6, false, true), Some(9));
+        assert_eq!(prompt_step_target(&prompts, 9, true, true), None);
+        assert_eq!(prompt_step_target(&prompts, 5, false, false), Some(0));
+        assert_eq!(prompt_step_target(&prompts, 5, true, false), Some(5));
+        assert_eq!(prompt_step_target(&prompts, 7, false, false), Some(5));
+        assert_eq!(prompt_step_target(&prompts, 12, false, false), Some(9));
+        assert_eq!(prompt_step_target(&prompts, 0, false, false), None);
+        assert_eq!(prompt_step_target(&[], 3, true, true), None);
     }
 
     #[test]

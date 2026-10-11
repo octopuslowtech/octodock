@@ -118,9 +118,15 @@ actions!(
         ArchiveSession,
         IncreaseUiZoom,
         DecreaseUiZoom,
-        FindInChat
+        FindInChat,
+        TranscriptTop,
+        TranscriptBottom,
+        PrevPrompt,
+        NextPrompt
     ]
 );
+
+const CHAT_MAIN_CONTEXT: &str = "ChatMain";
 
 /// Restore a default focus only after an in-flight handoff has had a frame to
 /// claim the window. A synchronous focus-lost fallback can otherwise steal
@@ -529,6 +535,12 @@ pub fn apply_keymap(
         // Pressing it again dismisses.
         KeyBinding::new(&platform_combo("mod-k"), ToggleCommandPalette, None),
         KeyBinding::new(&platform_combo("mod-f"), FindInChat, None),
+        KeyBinding::new("pageup", PrevPrompt, Some(CHAT_MAIN_CONTEXT)),
+        KeyBinding::new("pagedown", NextPrompt, Some(CHAT_MAIN_CONTEXT)),
+        KeyBinding::new("home", TranscriptTop, Some(CHAT_MAIN_CONTEXT)),
+        KeyBinding::new("end", TranscriptBottom, Some(CHAT_MAIN_CONTEXT)),
+        KeyBinding::new("home", TranscriptTop, Some("MessageComposer")),
+        KeyBinding::new("end", TranscriptBottom, Some("MessageComposer")),
         KeyBinding::new(
             &valid_or_default(
                 &keymap.switch_project,
@@ -10249,6 +10261,7 @@ impl Shell {
         let status = self.render_status_strip(composer_width, cx);
         self.chat_dropzone("chat-dropzone", self.composer.clone(), cx)
             .debug_selector(|| "chat-dropzone".into())
+            .key_context(CHAT_MAIN_CONTEXT)
             .track_focus(&self.navigation_focus.main)
             .capture_any_mouse_down(cx.listener(|this, _, window, cx| {
                 this.capture_navigation_focus(false, false, window, cx);
@@ -12753,6 +12766,18 @@ impl Render for Shell {
                     this.transcript
                         .update(cx, |transcript, cx| transcript.toggle_find(window, cx));
                 }
+            }))
+            .on_action(cx.listener(|this, _: &TranscriptTop, window, cx| {
+                this.transcript_key(true, window, cx, |t, cx| t.scroll_to_first_prompt(cx));
+            }))
+            .on_action(cx.listener(|this, _: &TranscriptBottom, window, cx| {
+                this.transcript_key(true, window, cx, |t, cx| t.jump_to_bottom(cx));
+            }))
+            .on_action(cx.listener(|this, _: &PrevPrompt, window, cx| {
+                this.transcript_key(false, window, cx, |t, cx| t.step_prompt(false, cx));
+            }))
+            .on_action(cx.listener(|this, _: &NextPrompt, window, cx| {
+                this.transcript_key(false, window, cx, |t, cx| t.step_prompt(true, cx));
             }))
             .on_action(cx.listener(|this, _: &OpenModelPicker, window, cx| {
                 if matches!(this.route, Route::Chat) && !this.overlay_owns_keyboard(cx) {

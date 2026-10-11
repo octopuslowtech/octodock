@@ -166,6 +166,26 @@ impl Shell {
         }
     }
 
+    pub(super) fn transcript_key(
+        &mut self,
+        needs_empty_draft: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+        scroll: impl FnOnce(&mut Transcript, &mut Context<Transcript>),
+    ) {
+        let in_composer = self.composer.focus_handle(cx).is_focused(window);
+        let owns_key = self.navigation_focus.main.is_focused(window)
+            || (in_composer && !(needs_empty_draft && self.composer.read(cx).has_draft(cx)));
+        if !matches!(self.route, Route::Chat)
+            || self.state.read(cx).selected_chat.is_none()
+            || !owns_key
+        {
+            cx.propagate();
+            return;
+        }
+        self.transcript.update(cx, scroll);
+    }
+
     /// Navigation requests focus once the destination composer renders.
     pub(super) fn focus_composer(&mut self, cx: &mut Context<Self>) {
         self.composer.update(cx, |composer, cx| {
