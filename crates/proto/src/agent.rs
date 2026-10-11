@@ -398,6 +398,25 @@ impl ToolCall {
             .map(str::trim)
             .filter(|model| !model.is_empty())
     }
+
+    pub fn skill_invocation(&self) -> Option<(&str, &str)> {
+        let ToolCall::Unknown { name, input } = self else {
+            return None;
+        };
+        if name != "Skill" {
+            return None;
+        }
+        let input = input.as_ref()?;
+        let field = |key: &str| {
+            input
+                .get(key)
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .unwrap_or_default()
+        };
+        let skill = field("skill");
+        (!skill.is_empty()).then(|| (skill, field("args")))
+    }
 }
 
 /// Spawn-input keys that carry a child model, in precedence order. Drivers
@@ -682,6 +701,100 @@ mod tests {
         };
         let json = serde_json::to_string(&ev).unwrap();
         assert_eq!(serde_json::from_str::<AgentEvent>(&json).unwrap(), ev);
+    }
+
+    #[test]
+    fn skill_invocation_reads_name_and_args_only_off_a_skill_call() {
+        let call = |name: &str, input: Option<serde_json::Value>| ToolCall::Unknown {
+            name: name.into(),
+            input,
+        };
+        let skill = call(
+            "Skill",
+            Some(serde_json::json!({ "skill": "setup-tenant", "args": " acme " })),
+        );
+        assert_eq!(skill.skill_invocation(), Some(("setup-tenant", "acme")));
+        assert_eq!(
+            crate::view::tool_chip_content(&skill),
+            ("Skill", "setup-tenant acme".to_owned())
+        );
+        let bare = call(
+            "Skill",
+            Some(serde_json::json!({ "skill": "setup-tenant" })),
+        );
+        assert_eq!(bare.skill_invocation(), Some(("setup-tenant", "")));
+        assert_eq!(
+            crate::view::tool_chip_content(&bare),
+            ("Skill", "setup-tenant".to_owned())
+        );
+        assert_eq!(call("Skill", None).skill_invocation(), None);
+        assert_eq!(
+            call("Bash", Some(serde_json::json!({ "skill": "x" }))).skill_invocation(),
+            None
+        );
+        assert_eq!(
+            crate::view::tool_chip_content(&call("Skill", None)),
+            ("Tool", "Skill".to_owned())
+        );
+    }
+
+    #[test]
+    fn named_tools_get_their_own_chip_label_and_detail() {
+        let chip = |name: &str, input: serde_json::Value| {
+            crate::view::tool_chip_content(&ToolCall::Unknown {
+                name: name.into(),
+                input: (!input.is_null()).then_some(input),
+            })
+        };
+        assert_eq!(
+            chip(
+                "AskUserQuestion",
+                serde_json::json!({ "questions": [{ "question": "Ship\nit?" }] })
+            ),
+            ("Ask", "Ship it?".to_owned())
+        );
+        assert_eq!(
+            chip(
+                "SendMessage",
+                serde_json::json!({ "to": "a1", "summary": "Resume", "message": "long" })
+            ),
+            ("Message", "Resume".to_owned())
+        );
+        assert_eq!(
+            chip(
+                "ToolSearch",
+                serde_json::json!({ "query": "select:TaskStop" })
+            ),
+            ("Tools", "select:TaskStop".to_owned())
+        );
+        assert_eq!(
+            chip("TaskStop", serde_json::json!({ "task_id": "b1" })),
+            ("Stop", "b1".to_owned())
+        );
+        assert_eq!(
+            chip("EnterPlanMode", serde_json::Value::Null),
+            ("Plan", String::new())
+        );
+        assert_eq!(
+            chip("Wait for agents", serde_json::Value::Null),
+            ("Agents", "wait".to_owned())
+        );
+        assert_eq!(
+            chip("Agent control: pause", serde_json::Value::Null),
+            ("Agent", "pause".to_owned())
+        );
+        assert_eq!(
+            chip("Delete: src/a.rs", serde_json::Value::Null),
+            ("Delete", "src/a.rs".to_owned())
+        );
+        assert_eq!(
+            chip("Agent: scan repo", serde_json::Value::Null),
+            ("Agent", "scan repo".to_owned())
+        );
+        assert_eq!(
+            chip("mystery: tool", serde_json::Value::Null),
+            ("Tool", "mystery: tool".to_owned())
+        );
     }
 
     /// Drivers spell the key differently; the chip must not care which one

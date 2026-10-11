@@ -495,8 +495,67 @@ pub fn tool_chip_content(call: &crate::ToolCall) -> (&'static str, String) {
     (label, single_line(&detail))
 }
 
+const NAMED_TOOLS: &[(&str, &str, &[&str])] = &[
+    ("AskUserQuestion", "Ask", &["/questions/0/question"]),
+    ("EnterPlanMode", "Plan", &[]),
+    ("ExitPlanMode", "Plan", &["/plan"]),
+    (
+        "SendMessage",
+        "Message",
+        &["/summary", "/message", "/content"],
+    ),
+    ("ListAgents", "Agents", &[]),
+    ("Workflow", "Workflow", &["/name", "/description"]),
+    ("TaskStop", "Stop", &["/task_id"]),
+    ("KillShell", "Stop", &["/shell_id"]),
+    ("TaskOutput", "Output", &["/task_id"]),
+    ("BashOutput", "Output", &["/bash_id"]),
+    ("Monitor", "Monitor", &["/description", "/command"]),
+    ("ScheduleWakeup", "Wake", &["/reason"]),
+    ("CronCreate", "Schedule", &["/prompt", "/cron"]),
+    ("CronList", "Schedule", &[]),
+    ("CronDelete", "Schedule", &["/id"]),
+    ("NotebookEdit", "Edit", &["/notebook_path"]),
+    ("MultiEdit", "Edit", &["/file_path"]),
+    ("ToolSearch", "Tools", &["/query"]),
+    ("EnterWorktree", "Worktree", &["/name", "/path"]),
+    ("ExitWorktree", "Worktree", &[]),
+    ("TaskCreate", "Task", &["/subject", "/description"]),
+    ("TaskUpdate", "Task", &["/subject", "/status", "/taskId"]),
+    ("TaskGet", "Task", &["/taskId"]),
+    ("TaskList", "Tasks", &[]),
+];
+
+fn named_tool_content(
+    name: &str,
+    input: Option<&serde_json::Value>,
+) -> Option<(&'static str, String)> {
+    if let Some((_, label, keys)) = NAMED_TOOLS.iter().find(|(tool, ..)| *tool == name) {
+        let detail = keys
+            .iter()
+            .find_map(|key| input?.pointer(key)?.as_str())
+            .unwrap_or_default();
+        return Some((*label, detail.to_owned()));
+    }
+    Some(match name {
+        "Wait for agents" => ("Agents", "wait".to_owned()),
+        "Send agent message" => ("Agent", "send message".to_owned()),
+        "Close agent" => ("Agent", "close".to_owned()),
+        "Resume agent" => ("Agent", "resume".to_owned()),
+        "Generate image" => ("Generate image", String::new()),
+        _ => match name.split_once(": ")? {
+            ("Agent control", tool) => ("Agent", tool.to_owned()),
+            ("Delete", path) => ("Delete", path.to_owned()),
+            _ => return None,
+        },
+    })
+}
+
 fn tool_chip_content_raw(call: &crate::ToolCall) -> (&'static str, String) {
     use crate::ToolCall;
+    if let Some((skill, args)) = call.skill_invocation() {
+        return ("Skill", format!("{skill} {args}").trim_end().to_owned());
+    }
     match call {
         ToolCall::Exec { command } => ("Run", command.clone()),
         ToolCall::ReadFile { path } => ("Read", path.clone()),
@@ -524,10 +583,12 @@ fn tool_chip_content_raw(call: &crate::ToolCall) -> (&'static str, String) {
         // (every native driver's convention): label them "Agent" with the
         // description as the detail — "Tool · Agent: scan repo" read as two
         // labels fighting.
-        ToolCall::Unknown { name, .. } => match name.strip_prefix("Agent: ") {
+        ToolCall::Unknown { name, input } => match name.strip_prefix("Agent: ") {
             Some(description) => ("Agent", description.to_owned()),
             None if name == "Agent" => ("Agent", String::new()),
-            None => ("Tool", name.clone()),
+            None => {
+                named_tool_content(name, input.as_ref()).unwrap_or_else(|| ("Tool", name.clone()))
+            }
         },
     }
 }
