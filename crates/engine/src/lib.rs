@@ -267,6 +267,7 @@ impl EngineCore {
         let uploads = Uploads::from_root_with_fallback(
             profile.uploads_root(),
             legacy_uploads_root.as_deref(),
+            Some(profile.device_root()),
         );
         // A recorded local→synced import grants this account the local
         // profile's uploads root read-only — transcripts imported earlier

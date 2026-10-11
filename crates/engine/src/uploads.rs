@@ -10,11 +10,13 @@
 //! Attachments live only on the host device — every read proxies through the
 //! owning device via `ReadAttachmentChunk`; nothing is mirrored to the edge.
 //!
-//! `read_chunk` serves attachments back in 45KB base64 chunks. Path jail:
-//! only files under the uploads dir or a workspace-known chat cwd are readable
-//! (the RPC layer supplies the cwd roots). Workspace files must be supported
-//! image types, as in zeron; files in the uploads dir read back whatever their
-//! type, so a queued message can restore them for editing.
+//! `read_chunk` serves attachments back in 45KB base64 chunks. Local images
+//! read back from anywhere on the host. Path jail: inside the engine's private
+//! data root only the uploads dir or a workspace-known chat cwd is readable
+//! (the RPC layer supplies the cwd roots), so profiles stay isolated. Files
+//! outside the uploads dir must be supported image types, as in zeron; files
+//! in the uploads dir read back whatever their type, so a queued message can
+//! restore them for editing.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -104,6 +106,8 @@ struct UploadsInner {
     /// them. RwLock: a local-profile import adds its source root at runtime so
     /// imported transcripts resolve without an engine restart.
     read_only_roots: std::sync::RwLock<Vec<PathBuf>>,
+    /// The engine data root: paths under it stay jailed to the roots above.
+    private_root: Option<PathBuf>,
 }
 
 #[derive(Clone)]
@@ -119,11 +123,16 @@ impl Uploads {
 
     /// Use an already-resolved profile uploads directory.
     pub fn from_root(dir: &Path) -> Self {
-        Self::from_root_with_fallback(dir, None)
+        Self::from_root_with_fallback(dir, None, None)
     }
 
-    /// Use a profile root for all writes and an optional legacy read-only root.
-    pub fn from_root_with_fallback(dir: &Path, legacy_read_root: Option<&Path>) -> Self {
+    /// Use a profile root for all writes, an optional legacy read-only root and
+    /// the engine data root whose other contents stay unreadable.
+    pub fn from_root_with_fallback(
+        dir: &Path,
+        legacy_read_root: Option<&Path>,
+        private_root: Option<&Path>,
+    ) -> Self {
         Self {
             inner: Arc::new(UploadsInner {
                 tmp: dir.join("tmp"),
@@ -134,6 +143,7 @@ impl Uploads {
                         .map(Path::to_path_buf)
                         .collect(),
                 ),
+                private_root: private_root.map(Path::to_path_buf),
             }),
         }
     }
@@ -242,7 +252,8 @@ impl Uploads {
     }
 
     /// Read one 45KB chunk of an attachment. `extra_roots` are the workspace's
-    /// known chat cwds — together with the uploads dir they form the path jail.
+    /// known chat cwds — together with the uploads dir they form the path jail
+    /// inside the private root.
     pub fn read_chunk(
         &self,
         path: &str,
@@ -342,30 +353,44 @@ impl Uploads {
             .chain(read_roots.iter())
             .chain(extra_roots.iter())
             .collect();
-        // Jail lexically BEFORE any filesystem call: tool chips send paths an
-        // agent printed, and merely opening `\\host\share\a.png` (or an autofs
-        // `/net/host/…`) reaches out to that host — on Windows with the
-        // user's NTLM credentials. Roots match in raw and canonical form
-        // (`/var` vs `/private/var`, symlinked cwds).
+        // Refuse lexically BEFORE any filesystem call: tool chips send paths an
+        // agent printed, and merely opening `\\host\share\a.png` reaches out
+        // to that host — on Windows with the user's NTLM credentials. Inside
+        // the private root only `roots` are readable; they match in raw and
+        // canonical form (`/var` vs `/private/var`, symlinked cwds).
         let requested = lexical_components(Path::new(path)).ok_or_else(outside)?;
-        let lexically_allowed = roots.iter().any(|root| {
+        let lexical_forms = |root: &Path| {
             let canonical = std::fs::canonicalize(root).ok();
-            [Some(root.as_path()), canonical.as_deref()]
+            [Some(root), canonical.as_deref()]
                 .into_iter()
                 .flatten()
                 .filter_map(lexical_components)
-                .any(|root| requested.len() > root.len() && requested.starts_with(&root))
+                .collect::<Vec<_>>()
+        };
+        let private = self.inner.private_root.as_deref();
+        let lexically_private = private.is_some_and(|root| {
+            lexical_forms(root)
+                .iter()
+                .any(|root| requested.starts_with(root))
         });
-        if !lexically_allowed {
+        let lexically_allowed = roots.iter().any(|root| {
+            lexical_forms(root)
+                .iter()
+                .any(|root| requested.len() > root.len() && requested.starts_with(root))
+        });
+        if lexically_private && !lexically_allowed {
             return Err(outside());
         }
-        // Canonicalize BOTH sides so symlinks can't escape.
+        // Canonicalize BOTH sides so symlinks can't reach into the private root.
         let resolved = std::fs::canonicalize(path).map_err(|_| outside())?;
+        let resolved_private = private
+            .and_then(|root| std::fs::canonicalize(root).ok())
+            .is_some_and(|root| resolved.starts_with(root));
         let allowed = roots
             .iter()
             .filter_map(|root| std::fs::canonicalize(root).ok())
             .any(|root| resolved.starts_with(&root) && resolved != root);
-        if !allowed {
+        if resolved_private && !allowed {
             return Err(outside());
         }
         let meta = std::fs::metadata(&resolved)?;
@@ -660,48 +685,58 @@ mod tests {
     }
 
     #[test]
-    fn network_and_escaping_paths_are_refused_before_touching_the_filesystem() {
+    fn local_images_read_back_from_anywhere_but_network_and_relative_paths_are_refused() {
         let dir = tempfile::tempdir().unwrap();
-        let workspace = tempfile::tempdir().unwrap();
         let elsewhere = tempfile::tempdir().unwrap();
         let uploads = Uploads::from_root(dir.path());
-        let roots = [workspace.path().to_path_buf()];
-        std::fs::write(workspace.path().join("shot.png"), b"png").unwrap();
-        std::fs::write(elsewhere.path().join("shot.png"), b"png").unwrap();
-        let inside = workspace.path().join("shot.png");
+        let shot = elsewhere.path().join("shot.png");
+        std::fs::write(&shot, b"png").unwrap();
+        assert!(uploads.read_chunk(shot.to_str().unwrap(), 0, &[]).is_ok());
+        for path in [
+            r"\\host\share\x.png",
+            "//host/share/x.png",
+            r"\\?\UNC\host\share\x.png",
+            r"\\.\pipe\x.png",
+            "file:////host/share/x.png",
+            "C:x.png",
+            "shot.png",
+        ] {
+            let error = uploads
+                .read_chunk(path, 0, &[])
+                .expect_err(&format!("accepted {path:?}"));
+            assert!(
+                error.to_string().contains("outside the upload cache"),
+                "{path:?}: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_private_root_stays_jailed_to_its_own_roots() {
+        let data = tempfile::tempdir().unwrap();
+        let elsewhere = tempfile::tempdir().unwrap();
+        let own = data.path().join("a").join("uploads");
+        let other = data.path().join("b").join("uploads");
+        std::fs::create_dir_all(&own).unwrap();
+        std::fs::create_dir_all(&other).unwrap();
+        std::fs::write(own.join("mine.png"), b"png").unwrap();
+        std::fs::write(other.join("theirs.png"), b"png").unwrap();
+        let uploads = Uploads::from_root_with_fallback(&own, None, Some(data.path()));
         assert!(
             uploads
-                .read_chunk(inside.to_str().unwrap(), 0, &roots)
+                .read_chunk(own.join("mine.png").to_str().unwrap(), 0, &[])
                 .is_ok()
         );
-        let escape = workspace
-            .path()
-            .join("..")
-            .join(elsewhere.path().file_name().unwrap())
-            .join("shot.png");
-        let mut paths = vec![
-            r"\\host\share\x.png".to_string(),
-            "//host/share/x.png".into(),
-            r"\\?\UNC\host\share\x.png".into(),
-            r"\\.\pipe\x.png".into(),
-            "file:////host/share/x.png".into(),
-            "/net/somehost/x.png".into(),
-            "C:x.png".into(),
-            "shot.png".into(),
-            escape.to_string_lossy().into_owned(),
-        ];
-        // A link from outside every root into one canonicalizes inside the
-        // jail; refusing it proves the lexical check runs before any
-        // filesystem call on the requested path.
+        let mut refused = vec![other.join("theirs.png")];
         #[cfg(unix)]
         {
             let link = elsewhere.path().join("link");
-            std::os::unix::fs::symlink(workspace.path(), &link).unwrap();
-            paths.push(link.join("shot.png").to_string_lossy().into_owned());
+            std::os::unix::fs::symlink(&other, &link).unwrap();
+            refused.push(link.join("theirs.png"));
         }
-        for path in paths {
+        for path in refused {
             let error = uploads
-                .read_chunk(&path, 0, &roots)
+                .read_chunk(path.to_str().unwrap(), 0, &[])
                 .expect_err(&format!("accepted {path:?}"));
             assert!(
                 error.to_string().contains("outside the upload cache"),

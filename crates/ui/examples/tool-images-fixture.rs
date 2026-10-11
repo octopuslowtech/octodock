@@ -312,7 +312,7 @@ fn main() -> anyhow::Result<()> {
             tool("t6", read("missing/nope.png"), "File not found", true),
             tool("t7", read(outside), "Read image", false),
             tool("t8", read("src/main.rs"), "fn main() {}", false),
-            {"id": "p1", "kind": "text", "text": "Above: PNG, chart, JPEG via MCP, WebP/SVG/GIF from output, a 15 MP PNG, a missing file and a path outside the workspace jail (both show *Image unavailable*)."},
+            {"id": "p1", "kind": "text", "text": "Above: PNG, chart, JPEG via MCP, WebP/SVG/GIF from output, a 15 MP PNG, a missing file (shows *Image unavailable*) and a path outside the workspace (previews when the file exists)."},
             {"id": "g1", "kind": "image", "path": abs("generated/gen.png"), "name": "gen.png", "mimeType": "image/png"},
          ]},
         {"id": "a2", "role": "assistant", "createdAt": 1788900002000_i64, "deviceId": device, "status": "complete",
