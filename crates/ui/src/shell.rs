@@ -2280,6 +2280,18 @@ pub struct Shell {
     files_tween: Option<WidthTween>,
     /// The session card's reveal (0 closed → 1 open).
     session_info_tween: Option<WidthTween>,
+    /// Whether the card showed last frame; a change starts the reveal tween.
+    session_info_shown: bool,
+    /// The card opened over a transcript too narrow to show it beside.
+    session_info_overlay: bool,
+    /// Whether the card showed at the toggle's press (see
+    /// `note_session_info_press`).
+    session_info_pressed_open: Option<bool>,
+    /// The card last showed docked beside the transcript (else over it).
+    session_info_docked: bool,
+    /// The room the transcript last held free for the docked card, eased
+    /// back from as the card hides because the column stopped fitting it.
+    session_info_last_reserve: f32,
     files_content_tween: Option<WidthTween>,
     /// The last tracked frame: its chat, the window fit, and for each of
     /// `[sidebar, surface host, Files]` the width painted and the width its
@@ -2727,6 +2739,11 @@ impl Shell {
             sidebar_tween: None,
             files_tween: None,
             session_info_tween: None,
+            session_info_shown: false,
+            session_info_overlay: false,
+            session_info_pressed_open: None,
+            session_info_docked: false,
+            session_info_last_reserve: 0.0,
             files_content_tween: None,
             painted_columns: None,
             fit_exits: [None; 3],
@@ -10733,26 +10750,10 @@ impl Shell {
         self.composer
             .update(cx, |composer, cx| composer.set_dock_frame(dock_frame, cx));
         // The session card: docked, the transcript holds its room free on
-        // the right and the composer follows the column left by half of it,
-        // so column and card center together.
-        let session_reveal = if has_selection {
-            self.session_info_reveal()
-        } else {
-            0.0
-        };
-        // The column's LIVE width: while the sidebar or a pane animates,
-        // `main_content_width` already holds the end width, and a reserve or
-        // card placed from it would jump ahead of the column and wait.
-        let live_main_width = (self.viewport_width
-            - self.sidebar_now()
-            - self.right_visible_width(cx)
-            - self.files_visible_width(cx))
-        .max(0.0);
-        let session_layout = session_info::session_card_layout(
-            live_main_width,
-            ui_settings.transcript_width,
-        );
-        let session_reserve = session_layout.reserve * session_reveal;
+        // the right and the composer follows the column left by half of it;
+        // over a column too tight for that, it floats once opened.
+        let (session_docked, session_reveal, session_reserve) =
+            self.session_info_frame(has_selection, cx);
         self.transcript
             .update(cx, |transcript, cx| transcript.set_right_reserve(session_reserve, cx));
         // Panel open/close glides the composer width; a window resize or a
@@ -10920,7 +10921,7 @@ impl Shell {
             .left(px(-session_reserve / 2.0))
             .child(self.render_status_strip(composer_width, cx));
         let session_card = self.render_session_info(
-            session_layout,
+            session_docked,
             session_reveal,
             self.viewport_height
                 - Theme::TITLEBAR_HEIGHT
@@ -11067,7 +11068,6 @@ impl Shell {
                                 div()
                                     .id("persistent-composer")
                                     .relative()
-                                    .left(px(-session_reserve / 2.0))
                                     .w(px(composer_width))
                                     .opacity(composer_opacity)
                                     .mx_auto()
@@ -11082,6 +11082,9 @@ impl Shell {
                                 self.reduced_motion,
                                 frame_time,
                             )
+                            // Centered on the transcript, which keeps the
+                            // session card's room free on its right.
+                            .shift_x(-session_reserve / 2.0)
                             .reserve_terminal(terminal_geometry.clone()),
                         )
                     })

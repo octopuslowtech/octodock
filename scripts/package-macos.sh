@@ -35,9 +35,9 @@ iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/octodock.icns"
 rm -rf "$ICONSET"
 
 if [[ -n "${CODESIGN_IDENTITY:-}" ]]; then
-  codesign --entitlements "$ROOT/dist/macos/Dictation.entitlements" --force --options runtime --timestamp --sign "$CODESIGN_IDENTITY" "$APP"
+  codesign --entitlements "$ROOT/dist/macos/Zeron.entitlements" --force --options runtime --timestamp --sign "$CODESIGN_IDENTITY" "$APP"
 else
-  codesign --deep --force --entitlements "$ROOT/dist/macos/voice.entitlements" --sign - "$APP"
+  codesign --deep --force --entitlements "$ROOT/dist/macos/Zeron.entitlements" --sign - "$APP"
 fi
 
 notarize() {
