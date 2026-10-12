@@ -607,10 +607,10 @@ pub fn sidecar_payload(event: &AgentEvent) -> Option<SidecarPayload> {
 ///
 /// Keeps: command / path / pattern / url / query / todo items / server+tool names,
 /// a subagent spawn's model/type (see [`spawn_badge`] — a couple of short
-/// identifiers the chip names the child by), and an Mcp input that
-/// serializes within [`MCP_INPUT_MAX`] bytes.
-/// Drops: WriteFile content, EditFile old/new strings, WebFetch prompt, Unknown input,
-/// oversized Mcp input.
+/// identifiers the chip names the child by), and an Mcp or non-spawn Unknown
+/// input that serializes within [`MCP_INPUT_MAX`] bytes.
+/// Drops: WriteFile content, EditFile old/new strings, WebFetch prompt, the rest
+/// of a spawn's input, oversized Mcp/Unknown input.
 /// Full inputs remain only in the host's local run journal. Idempotent.
 pub fn sanitize_tool_call(call: &ToolCall) -> ToolCall {
     match call {
@@ -642,9 +642,15 @@ pub fn sanitize_tool_call(call: &ToolCall) -> ToolCall {
                     .filter(|input| input.to_string().len() <= MCP_INPUT_MAX)
             },
         },
-        ToolCall::Unknown { name, .. } => ToolCall::Unknown {
+        ToolCall::Unknown { name, input } => ToolCall::Unknown {
             name: name.clone(),
-            input: spawn_badge(call),
+            input: if call.is_subagent_spawn() {
+                spawn_badge(call)
+            } else {
+                input
+                    .clone()
+                    .filter(|input| input.to_string().len() <= MCP_INPUT_MAX)
+            },
         },
         other => other.clone(),
     }
@@ -981,16 +987,22 @@ mod tests {
         assert_eq!(sanitize_tool_call(&clean), clean);
     }
 
-    /// An ordinary tool's input still goes, even when it happens to carry a
-    /// `model` argument — the badge is gated on the spawn genus, not the key.
     #[test]
-    fn sanitize_still_strips_a_non_spawn_carrying_a_model_argument() {
-        let call = ToolCall::Unknown {
+    fn sanitize_keeps_a_small_unknown_input_and_drops_an_oversized_one() {
+        let skill = ToolCall::Unknown {
+            name: "Skill".into(),
+            input: Some(serde_json::json!({ "skill": "setup-tenant", "args": "acme" })),
+        };
+        let clean = sanitize_tool_call(&skill);
+        assert_eq!(clean, skill);
+        assert_eq!(clean.skill_invocation(), Some(("setup-tenant", "acme")));
+
+        let large = ToolCall::Unknown {
             name: "SomeTool".into(),
-            input: Some(serde_json::json!({ "model": "haiku", "prompt": "secret" })),
+            input: Some(serde_json::json!({ "prompt": "x".repeat(MCP_INPUT_MAX) })),
         };
         assert_eq!(
-            sanitize_tool_call(&call),
+            sanitize_tool_call(&large),
             ToolCall::Unknown {
                 name: "SomeTool".into(),
                 input: None,
