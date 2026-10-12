@@ -6174,9 +6174,25 @@ pub struct Composer {
 }
 
 struct PromptHistoryPopup {
+    all: Vec<PromptEntry>,
     entries: Vec<PromptEntry>,
     active: Option<usize>,
     focus_pending: bool,
+    search: Entity<ComposerInput>,
+    _search_events: Subscription,
+}
+
+impl PromptHistoryPopup {
+    fn filter(&mut self, query: &str) {
+        let query = query.trim().to_lowercase();
+        self.entries = self
+            .all
+            .iter()
+            .filter(|entry| crate::shell::command_palette::matches_query(&query, &entry.text))
+            .cloned()
+            .collect();
+        self.active = (!self.entries.is_empty()).then_some(0);
+    }
 }
 
 const PROMPT_HISTORY_LABEL_CHARS: usize = 240;
@@ -8567,11 +8583,28 @@ impl Composer {
                         .to_vec()
                 })
                 .unwrap_or_default();
+            let search = cx.new(|cx| {
+                ComposerInput::with_context("Search prompt history…", PALETTE_SEARCH_CONTEXT, cx)
+            });
+            let events = cx.subscribe(&search, |this, search, event, cx| {
+                if matches!(event, ComposerInputEvent::Edited) {
+                    let query = search.read(cx).text().to_string();
+                    if let Some(popup) = this.prompt_history.as_mut() {
+                        popup.filter(&query);
+                    }
+                    this.history_scroll
+                        .set_offset(gpui::point(px(0.0), px(0.0)));
+                    cx.notify();
+                }
+            });
             self.history_scroll = gpui::ScrollHandle::new();
             self.prompt_history = Some(PromptHistoryPopup {
                 active: (!entries.is_empty()).then_some(0),
+                all: entries.clone(),
                 entries,
                 focus_pending: true,
+                search,
+                _search_events: events,
             });
         }
         cx.notify();
@@ -8616,8 +8649,11 @@ impl Composer {
 
         let popup = self.prompt_history.as_mut()?;
         if std::mem::take(&mut popup.focus_pending) {
-            window.focus(&self.history_focus, cx);
+            window.focus(&popup.search.read(cx).focus_handle.clone(), cx);
         }
+        let search = popup.search.clone();
+        let query = search.read(cx).text().to_string();
+        let no_history = popup.all.is_empty();
         let viewport = window.viewport_size();
         let theme = Theme::of(cx).for_popup();
         let now = chrono::Utc::now();
@@ -8665,7 +8701,11 @@ impl Composer {
                         .overflow_hidden()
                         .truncate()
                         .text_color(theme.text)
-                        .child(label),
+                        .child(crate::popover::search_highlight(
+                            label,
+                            Some(&query),
+                            &theme,
+                        )),
                 )
                 .child(
                     div()
@@ -8691,11 +8731,15 @@ impl Composer {
             .p(px(8.0))
             .children(rows)
             .when(empty, |el| {
-                el.child(palette::palette_empty(
-                    &theme,
-                    "No prompts yet",
-                    "Prompts you send in this project appear here.",
-                ))
+                el.child(if no_history {
+                    palette::palette_empty(
+                        &theme,
+                        "No prompts yet",
+                        "Prompts you send in this project appear here.",
+                    )
+                } else {
+                    palette::palette_empty(&theme, "No results", "Try different words.")
+                })
             });
         let body = palette::palette_results_fade(body, &self.history_scroll);
         let shortcut = crate::settings::current(cx).keymap.prompt_history;
@@ -8723,34 +8767,11 @@ impl Composer {
             cx.stop_propagation();
         }))
         .on_mouse_down_out(cx.listener(|this, _, _, cx| this.close_prompt_history(cx)))
-        .child(
-            div()
-                .min_h(px(44.0))
-                .flex_none()
-                .px(px(16.0))
-                .py(px(8.0))
-                .flex()
-                .items_center()
-                .gap(px(10.0))
-                .border_b_1()
-                .border_color(crate::theme::hairline(0.06))
-                .child(
-                    crate::icons::icon(crate::icons::CLOCK_CIRCLE)
-                        .size(px(16.0))
-                        .text_color(theme.text_muted),
-                )
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .text_size(crate::typography::ui_rems(14.0))
-                        .child("Prompt history"),
-                )
-                .child(crate::popover::kbd_hint(
-                    &theme,
-                    &crate::settings::badge_combo(&shortcut),
-                )),
-        )
+        .child(palette::palette_header(
+            &theme,
+            search.into_any_element(),
+            crate::popover::kbd_hint(&theme, &crate::settings::badge_combo(&shortcut)),
+        ))
         .child(body)
         .child(
             palette::palette_footer()
@@ -12106,6 +12127,35 @@ mod tests {
                 composer.accept_prompt_history(active, cx);
                 assert!(composer.prompt_history.is_none());
                 assert_eq!(composer.input.read(cx).text(), "older prompt");
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn prompt_history_search_filters_prompts(cx: &mut gpui::TestAppContext) {
+        let (dir, window) = composer_focus_window(cx);
+        let mut history = PromptHistory::default();
+        history.record("", "Fix the Login page", 1);
+        history.record("", "write release notes", 2);
+        history.save(dir.path()).unwrap();
+        window
+            .update(cx, |composer, _, cx| {
+                composer.state.update(cx, |state, _| {
+                    state.data_dir = Some(dir.path().to_path_buf());
+                });
+                composer.toggle_prompt_history(cx);
+                let popup = composer.prompt_history.as_mut().unwrap();
+                popup.filter(" login fix ");
+                assert_eq!(popup.entries.len(), 1);
+                assert_eq!(popup.active, Some(0));
+                popup.filter("missing");
+                assert!(popup.entries.is_empty());
+                assert_eq!(popup.active, None);
+                popup.filter("");
+                assert_eq!(popup.entries.len(), 2);
+                popup.filter("login");
+                composer.accept_prompt_history(0, cx);
+                assert_eq!(composer.input.read(cx).text(), "Fix the Login page");
             })
             .unwrap();
     }

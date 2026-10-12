@@ -357,7 +357,7 @@ impl PaletteSection {
     }
 }
 
-fn matches_query(query: &str, text: &str) -> bool {
+pub(crate) fn matches_query(query: &str, text: &str) -> bool {
     let text = text.to_lowercase();
     query.split_whitespace().all(|word| text.contains(word))
 }
@@ -1563,7 +1563,7 @@ pub(crate) fn palette_card(
         .text_color(theme.text)
 }
 
-pub(super) fn palette_header(theme: &Theme, search: AnyElement, hint: gpui::Div) -> gpui::Div {
+pub(crate) fn palette_header(theme: &Theme, search: AnyElement, hint: gpui::Div) -> gpui::Div {
     div()
         .min_h(px(44.0))
         .flex_none()
