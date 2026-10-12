@@ -1085,10 +1085,20 @@ impl Shell {
             }
             RowKind::Project(id) => {
                 let state = self.state.read(cx);
-                let space = state.space_row(id)?;
-                let starred = self.project_starred(space, cx);
-                let name = state.representative_space(space).display_name().to_string();
+                let space = state.space_row(id)?.clone();
+                let starred = self.project_starred(&space, cx);
+                let name = state
+                    .representative_space(&space)
+                    .display_name()
+                    .to_string();
                 let path = space.path.clone();
+                let art = self.project_icons.render(
+                    &self.state,
+                    Some(&space),
+                    self.active_sidebar_pin_profile_key(cx),
+                    false,
+                    cx,
+                );
                 let target = row.clone();
                 let star_id = id.clone();
                 popover::menu_row(theme, active, format!("project-result-{ix}"))
@@ -1101,11 +1111,7 @@ impl Shell {
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.activate_palette_row(target.clone(), window, cx)
                     }))
-                    .child(
-                        icon(icons::FOLDER)
-                            .size(px(16.0))
-                            .text_color(theme.text_muted),
-                    )
+                    .child(div().size(px(16.0)).flex_none().child(art))
                     .child(
                         div()
                             .flex_1()
