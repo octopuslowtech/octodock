@@ -85,14 +85,14 @@ loro-protocol = "0.3"
 # octopuslowtech/zui-fork `ui-zoom` adds Window::set_zoom on top of the zeronsh/zui
 # rev upstream pins (361ff20); merge the new upstream rev into that branch when bumping.
 # A working clone lives in the git-ignored vendor/zui.
-gpui = { git = "https://github.com/octopuslowtech/zui-fork", rev = "cff76c53c36a1eae6b78b77a82260f156028aa77" }
-gpui_platform = { git = "https://github.com/octopuslowtech/zui-fork", rev = "cff76c53c36a1eae6b78b77a82260f156028aa77", features = [
+gpui = { git = "https://github.com/octopuslowtech/zui-fork", rev = "96691fe3f302cb38a0301b051121ca0a046c9dd7" }
+gpui_platform = { git = "https://github.com/octopuslowtech/zui-fork", rev = "96691fe3f302cb38a0301b051121ca0a046c9dd7", features = [
     "wayland",
     "x11",
     "font-kit",
     "runtime_shaders",
 ] }
-gpui_tokio = { git = "https://github.com/octopuslowtech/zui-fork", rev = "cff76c53c36a1eae6b78b77a82260f156028aa77" }
+gpui_tokio = { git = "https://github.com/octopuslowtech/zui-fork", rev = "96691fe3f302cb38a0301b051121ca0a046c9dd7" }
 gpui-base = { git = "https://github.com/zeronsh/gpui-component", rev = "701ca97af7983bf85343d2d1d404ab528b18ec96" }
 
 # diffs
@@ -168,5 +168,5 @@ opt-level = 0
 opt-level = 2
 
 [patch."https://github.com/zeronsh/zui"]
-gpui = { git = "https://github.com/octopuslowtech/zui-fork", rev = "cff76c53c36a1eae6b78b77a82260f156028aa77" }
-gpui_macros = { git = "https://github.com/octopuslowtech/zui-fork", rev = "cff76c53c36a1eae6b78b77a82260f156028aa77" }
+gpui = { git = "https://github.com/octopuslowtech/zui-fork", rev = "96691fe3f302cb38a0301b051121ca0a046c9dd7" }
+gpui_macros = { git = "https://github.com/octopuslowtech/zui-fork", rev = "96691fe3f302cb38a0301b051121ca0a046c9dd7" }
