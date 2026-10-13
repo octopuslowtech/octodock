@@ -48,6 +48,7 @@ use crate::settings::files::{FilesSettingsEvent, FilesSettingsPage};
 use crate::settings::harnesses::HarnessesPage;
 use crate::settings::notifications::{NotificationsEvent, NotificationsPage};
 use crate::settings::shortcuts::{ShortcutsEvent, ShortcutsPage};
+use crate::settings::skills::SkillsPage;
 use crate::settings::{
     self, CHAT_PANEL_MIN, ComposerSendBehavior, FILES_PANEL_MIN, JUMP_SLOTS, KeymapConfig,
     RIGHT_PANE_MIN, SIDEBAR_DEFAULT, SIDEBAR_MAX, SIDEBAR_MIN, SavePolicy, ShortcutId,
@@ -598,6 +599,7 @@ pub enum SettingsSection {
     /// Which harnesses the composer offers (enable/disable toggles) —
     /// labeled "Providers".
     Harnesses,
+    Skills,
     Usage,
     /// Per-provider CLI accounts (login, usage) — labeled "Accounts".
     Agents,
@@ -615,13 +617,14 @@ pub enum SettingsSection {
 
 impl SettingsSection {
     /// Sections shown in Settings. `Agents` is a legacy Accounts route alias.
-    pub const ALL: [SettingsSection; 10] = [
+    pub const ALL: [SettingsSection; 11] = [
         SettingsSection::General,
         SettingsSection::Appearance,
         SettingsSection::Notifications,
         SettingsSection::Voice,
         SettingsSection::Shortcuts,
         SettingsSection::Harnesses,
+        SettingsSection::Skills,
         SettingsSection::Usage,
         SettingsSection::Files,
         SettingsSection::Appshots,
@@ -661,6 +664,7 @@ impl SettingsSection {
             SettingsSection::Usage => "usage",
             SettingsSection::Devices => "devices",
             SettingsSection::Harnesses => "providers",
+            SettingsSection::Skills => "skills",
             SettingsSection::Agents => "agents",
             SettingsSection::Appearance => "appearance",
             SettingsSection::Files => "files",
@@ -679,6 +683,7 @@ impl SettingsSection {
             "devices" => SettingsSection::Devices,
             "usage" => SettingsSection::Usage,
             "providers" | "harnesses" => SettingsSection::Harnesses,
+            "skills" => SettingsSection::Skills,
             "agents" => SettingsSection::Agents,
             "appearance" => SettingsSection::Appearance,
             "files" => SettingsSection::Files,
@@ -704,6 +709,7 @@ impl SettingsSection {
         match self {
             SettingsSection::Devices => "Devices",
             SettingsSection::Harnesses => "Providers",
+            SettingsSection::Skills => "Skills",
             SettingsSection::Usage => "Usage",
             SettingsSection::Agents => "Accounts",
             SettingsSection::Appearance => "Appearance",
@@ -2136,6 +2142,7 @@ pub struct Shell {
     accounts_page: Option<Entity<AccountsPage>>,
     sidebar_usage: Entity<crate::sidebar_usage::SidebarUsage>,
     harnesses_page: Option<Entity<HarnessesPage>>,
+    skills_page: Option<Entity<SkillsPage>>,
     usage_page: Option<Entity<crate::usage_panel::UsagePanel>>,
     usage_dialog: Option<Entity<crate::usage_panel::UsagePanel>>,
     shortcuts_sub: Option<Subscription>,
@@ -2653,6 +2660,7 @@ impl Shell {
             accounts_page: None,
             sidebar_usage,
             harnesses_page: None,
+            skills_page: None,
             usage_page: None,
             usage_dialog: None,
             shortcuts_sub: None,
@@ -5339,6 +5347,9 @@ impl Shell {
         if section == SettingsSection::Harnesses {
             self.harnesses_page = None;
         }
+        if section == SettingsSection::Skills {
+            self.skills_page = None;
+        }
         if !matches!(self.route, Route::Settings(_)) {
             self.settings_focus_pending = true;
             self.settings_return_route = self.route;
@@ -5394,6 +5405,10 @@ impl Shell {
                 .is_some_and(|page| page.update(cx, |page, cx| page.dismiss_on_escape(cx))),
             SettingsSection::Harnesses => self
                 .harnesses_page
+                .as_ref()
+                .is_some_and(|page| page.update(cx, |page, cx| page.dismiss_on_escape(cx))),
+            SettingsSection::Skills => self
+                .skills_page
                 .as_ref()
                 .is_some_and(|page| page.update(cx, |page, cx| page.dismiss_on_escape(cx))),
             SettingsSection::Appearance => self
@@ -5582,6 +5597,16 @@ impl Shell {
                     self.harnesses_page = Some(cx.new(|cx| HarnessesPage::new(state, cx)));
                 }
                 match &self.harnesses_page {
+                    Some(page) => page.clone().into_any_element(),
+                    None => Empty.into_any_element(),
+                }
+            }
+            SettingsSection::Skills => {
+                if self.skills_page.is_none() {
+                    let state = self.state.clone();
+                    self.skills_page = Some(cx.new(|cx| SkillsPage::new(state, cx)));
+                }
+                match &self.skills_page {
                     Some(page) => page.clone().into_any_element(),
                     None => Empty.into_any_element(),
                 }
@@ -7914,6 +7939,7 @@ impl Shell {
         let section_icon = |item: SettingsSection| match item {
             SettingsSection::Devices => icons::MONITOR,
             SettingsSection::Harnesses => icons::WIDGET,
+            SettingsSection::Skills => icons::MAGIC_STICK_3,
             SettingsSection::Usage => icons::CLOCK_CIRCLE,
             SettingsSection::Agents => icons::KEY_MINIMALISTIC,
             SettingsSection::Appearance => icons::TUNING,
@@ -18225,6 +18251,7 @@ mod settings_modal_regressions {
             ("settings/providers", SettingsSection::Harnesses),
             ("settings/agents", SettingsSection::Harnesses),
             ("settings/harnesses", SettingsSection::Harnesses),
+            ("settings/skills", SettingsSection::Skills),
             ("settings/general", SettingsSection::General),
             ("settings/voice", SettingsSection::Voice),
             ("settings/conversations", SettingsSection::General),
