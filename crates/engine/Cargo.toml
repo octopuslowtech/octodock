@@ -37,6 +37,7 @@ ignore.workspace = true
 fff-search.workspace = true
 
 tempfile.workspace = true
+zip.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 dunce = "1"
@@ -48,7 +49,6 @@ zeron-mcp.workspace = true
 zeron-harness = { workspace = true, features = ["installer-fixture"] }
 # Paused-clock tests (the 30-minute idle reaper).
 tokio = { workspace = true, features = ["test-util"] }
-zip.workspace = true
 tokio-tungstenite.workspace = true
 # In-process registry server for the two-engine workspace integration tests.
 zeron-sync = { workspace = true, features = ["mock-server"] }

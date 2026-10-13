@@ -630,6 +630,7 @@ pub struct EngineRpc {
     diff_sync: CheckoutDiffSync,
     uploads: Uploads,
     agent_accounts: AgentAccounts,
+    skill_library: crate::skill_library::SkillLibrary,
     auth: Option<Auth>,
     links: Option<std::sync::Arc<LinkCache>>,
     harness_updates: Option<crate::harness_updates::HarnessUpdateCoordinator>,
@@ -661,6 +662,8 @@ impl EngineRpc {
             capabilities: zeron_proto::capabilities::current(),
         };
         let github = GitHubCli::new().with_store(repos.data_dir());
+        let skill_library =
+            crate::skill_library::SkillLibrary::new(repos.data_dir().join("skill-library"));
         Self {
             voice: sessions.voice_manager(),
             sessions,
@@ -677,6 +680,7 @@ impl EngineRpc {
             diff_sync,
             uploads,
             agent_accounts,
+            skill_library,
             auth: None,
             links: None,
             harness_updates: None,
@@ -770,6 +774,23 @@ impl EngineRpc {
             .await
             .map(|workspace| workspace.root)
             .map_err(Into::into)
+    }
+
+    async fn skill_project(
+        &self,
+        space_id: Option<String>,
+    ) -> Result<Option<std::path::PathBuf>, RpcError> {
+        let Some(space_id) = space_id else {
+            return Ok(None);
+        };
+        self.file_search_root(&FileSearchParams {
+            query: String::new(),
+            chat_id: None,
+            space_id: Some(space_id),
+            path: None,
+        })
+        .await
+        .map(Some)
     }
 
     /// Catalogs also serve projectless sessions, which have no workspace space.
@@ -1882,6 +1903,40 @@ impl RpcService for EngineRpc {
                     .await
                     .map_err(|e| RpcError::Failed(e.to_string()))?;
                 RpcReply::value(&skills)
+            }
+            methods::LIST_SKILL_LIBRARY => {
+                #[derive(Deserialize)]
+                #[serde(rename_all = "camelCase")]
+                struct Params {
+                    #[serde(default)]
+                    space_id: Option<String>,
+                }
+                let p: Params = parse_params(params)?;
+                let project = self.skill_project(p.space_id).await?;
+                let view = self
+                    .skill_library
+                    .view(project)
+                    .await
+                    .map_err(|error| RpcError::Failed(format!("{error:#}")))?;
+                RpcReply::value(&view)
+            }
+            methods::MUTATE_SKILL_LIBRARY => {
+                #[derive(Deserialize)]
+                #[serde(rename_all = "camelCase")]
+                struct Params {
+                    #[serde(default)]
+                    space_id: Option<String>,
+                    #[serde(flatten)]
+                    op: zeron_proto::skill_library::SkillLibraryOp,
+                }
+                let p: Params = parse_params(params)?;
+                let project = self.skill_project(p.space_id).await?;
+                let view = self
+                    .skill_library
+                    .apply(p.op, project)
+                    .await
+                    .map_err(|error| RpcError::Failed(format!("{error:#}")))?;
+                RpcReply::value(&view)
             }
             methods::LIST_COMMANDS => {
                 #[derive(Deserialize)]

@@ -52,6 +52,8 @@ pub mod methods {
     pub const SET_HARNESS_ENABLED: &str = "SetHarnessEnabled";
     pub const LIST_MODELS: &str = "ListModels";
     pub const LIST_SKILLS: &str = "ListSkills";
+    pub const LIST_SKILL_LIBRARY: &str = "ListSkillLibrary";
+    pub const MUTATE_SKILL_LIBRARY: &str = "MutateSkillLibrary";
     pub const LIST_COMMANDS: &str = "ListCommands";
     pub const QUEUE_COMMAND: &str = "QueueCommand";
     pub const TAKE_PROJECT_ACTION_SETUP: &str = "TakeProjectActionSetup";
