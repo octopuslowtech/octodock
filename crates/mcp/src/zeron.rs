@@ -386,12 +386,6 @@ impl Zeron {
         resolve_chat_in(&chats, key)
     }
 
-    /// Space id, exact path, display name, or unique path suffix.
-    pub async fn resolve_space(&self, key: &str) -> anyhow::Result<Space> {
-        let spaces = self.spaces().await?;
-        resolve_space_in(&spaces, key.trim())
-    }
-
     /// Resolve the host first when specified, so repeated project names/paths
     /// on other machines cannot influence selection.
     pub async fn resolve_target(

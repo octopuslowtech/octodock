@@ -49,10 +49,7 @@ document, sync journal, or owner RPC stream. Helper stderr is discarded; errors
 and diagnostics use typed rejection reasons. Child processes are killed and
 reaped on cancellation, including when a helper control reply is stalled.
 
-The earlier `zeron-audio` PCM/AEC prototype remains isolated and tested offline;
-it is not a dependency of the released UI or the subscription voice path.
-`voice-experimental` is retained as an empty compatibility build feature. The
-Codex voice control is available in ordinary desktop builds.
+The Codex voice control is available in ordinary desktop builds.
 
 ## Lifecycle, transcript and MCP
 

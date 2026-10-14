@@ -3,7 +3,6 @@ use serde::{Deserialize, Serialize};
 pub mod remote;
 
 pub const MAX_AUDIO_BYTES: usize = 16_384;
-pub const MEDIA_QUEUE_FRAMES: usize = 8;
 pub const MAX_TRANSCRIPT_BYTES: usize = 32_768;
 
 /// Id prefix of the hidden chat that hosts a voice orchestrator session. It

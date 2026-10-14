@@ -91,8 +91,10 @@ use zeron_proto::{
     AgentLoginPoll, AgentLoginStart, AgentLoginStatus, AgentUsageWindow, HarnessId,
 };
 
+use crate::auth::url_encode;
 use crate::repos::home_dir;
 use crate::{EngineError, new_id, now_ms};
+use zeron_harness::redact::strip_ansi;
 
 mod oauth;
 #[cfg(test)]
@@ -1502,8 +1504,8 @@ impl AgentAccounts {
             "{CLAUDE_LOOPBACK_AUTHORIZE_URL}?code=true&client_id={CLAUDE_CLIENT_ID}\
              &response_type=code&redirect_uri={}&scope={}&code_challenge={challenge}\
              &code_challenge_method=S256&state={state}",
-            urlencode(&redirect),
-            urlencode(CLAUDE_LOOPBACK_SCOPES),
+            url_encode(&redirect),
+            url_encode(CLAUDE_LOOPBACK_SCOPES),
         );
         let task_state = Arc::new(Mutex::new(TaskLoginState {
             url: Some(url.clone()),
@@ -1593,8 +1595,8 @@ impl AgentAccounts {
             "https://claude.ai/oauth/authorize?code=true&client_id={CLAUDE_CLIENT_ID}\
              &response_type=code&redirect_uri={}&scope={}&code_challenge={challenge}\
              &code_challenge_method=S256&state={state}",
-            urlencode(CLAUDE_REDIRECT),
-            urlencode(CLAUDE_SCOPES),
+            url_encode(CLAUDE_REDIRECT),
+            url_encode(CLAUDE_SCOPES),
         );
         lock(&self.inner.flows).insert(
             login_id.clone(),
@@ -3672,47 +3674,6 @@ fn scan_openai_url(output: &str) -> Option<String> {
     scan_https_url(output, &["auth.openai.com"])
 }
 
-/// Terminal escape sequences (colours, cursor moves) removed — the CLIs
-/// colour their sign-in urls and codes.
-fn strip_ansi(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    let mut chars = text.chars().peekable();
-    while let Some(c) = chars.next() {
-        if c != '\u{1b}' {
-            out.push(c);
-            continue;
-        }
-        match chars.peek() {
-            // CSI: parameters/intermediates up to a final byte in @..~.
-            Some('[') => {
-                chars.next();
-                for c in chars.by_ref() {
-                    if ('@'..='~').contains(&c) {
-                        break;
-                    }
-                }
-            }
-            // OSC (hyperlinks): up to BEL or ESC \.
-            Some(']') => {
-                chars.next();
-                while let Some(c) = chars.next() {
-                    if c == '\u{7}' {
-                        break;
-                    }
-                    if c == '\u{1b}' {
-                        chars.next();
-                        break;
-                    }
-                }
-            }
-            _ => {
-                chars.next();
-            }
-        }
-    }
-    out
-}
-
 /// The first `https://` url in `output` (escapes stripped) whose host is
 /// one of `hosts` or a subdomain of one (on a label boundary), with no
 /// userinfo or explicit port — see [`stores::trusted_page`].
@@ -4070,30 +4031,6 @@ fn html_escape(text: &str) -> String {
         .replace('"', "&quot;")
 }
 
-/// Minimal percent-encoding for OAuth query params (matches `encodeURIComponent`
-/// for the constant inputs used here).
-fn urlencode(input: &str) -> String {
-    let mut out = String::with_capacity(input.len() * 3);
-    for byte in input.bytes() {
-        match byte {
-            b'A'..=b'Z'
-            | b'a'..=b'z'
-            | b'0'..=b'9'
-            | b'-'
-            | b'_'
-            | b'.'
-            | b'!'
-            | b'~'
-            | b'*'
-            | b'\''
-            | b'('
-            | b')' => out.push(byte as char),
-            _ => out.push_str(&format!("%{byte:02X}")),
-        }
-    }
-    out
-}
-
 fn remove_if_exists(file: &Path) -> Result<(), EngineError> {
     match std::fs::remove_file(file) {
         Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.into()),
@@ -4390,10 +4327,10 @@ mod tests {
     #[test]
     fn urlencode_matches_encode_uri_component() {
         assert_eq!(
-            urlencode("org:create_api_key user:profile"),
+            url_encode("org:create_api_key user:profile"),
             "org%3Acreate_api_key%20user%3Aprofile"
         );
-        assert_eq!(urlencode("https://a/b"), "https%3A%2F%2Fa%2Fb");
+        assert_eq!(url_encode("https://a/b"), "https%3A%2F%2Fa%2Fb");
     }
 
     #[test]

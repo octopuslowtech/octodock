@@ -37,11 +37,6 @@ use crate::schema::DocError;
 /// (`workspace2` / `ws2/{orgId}`), so no v1 reader exists.
 pub const WORKSPACE_SCHEMA_VERSION: i64 = 2;
 
-/// Ephemeral presence key for a device (`presence/{deviceId}` → online timestamp).
-pub fn presence_key(device_id: &str) -> String {
-    format!("presence/{device_id}")
-}
-
 /// Everything in the workspace doc, materialized (`read_all`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

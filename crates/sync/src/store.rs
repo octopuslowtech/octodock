@@ -723,7 +723,7 @@ fn worth_vacuuming(page_size: i64, page_count: i64, freelist: i64) -> bool {
         && freelist * VACUUM_MIN_FREE_DENOMINATOR >= page_count
 }
 
-fn now_ms() -> i64 {
+pub(crate) fn now_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)

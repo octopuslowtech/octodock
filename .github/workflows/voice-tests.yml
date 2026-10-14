@@ -2,7 +2,6 @@ name: Native Codex voice
 on:
   pull_request:
     paths:
-      - 'crates/audio/**'
       - 'crates/voice-media/**'
       - 'crates/voice-session/**'
       - 'crates/orb/**'
@@ -67,8 +66,6 @@ jobs:
           cargo test --locked -p zeron-engine --test device_routing
           cargo test --locked -p zeron-rpc --test device_room
           cargo test --locked -p zeron-mcp --lib
-      - name: Native audio and WebRTC AEC3
-        run: cargo test --locked -p zeron-audio --features aec --lib
 
   native-platform-check:
     strategy:

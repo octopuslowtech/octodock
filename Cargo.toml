@@ -7,7 +7,6 @@ members = [
     "crates/orb",
     "crates/veil",
     "crates/theme",
-    "crates/audio",
     "crates/proto",
     "crates/preview",
     "crates/doc",
@@ -19,7 +18,6 @@ members = [
     "crates/syntax",
     "crates/markdown",
     "crates/mcp",
-    "crates/text",
     "apps/octodock",
 ]
 
@@ -34,7 +32,6 @@ zeron-voice-session = { path = "crates/voice-session" }
 zeron-orb = { path = "crates/orb" }
 zeron-veil = { path = "crates/veil" }
 zeron-voice-media = { path = "crates/voice-media" }
-zeron-audio = { path = "crates/audio" }
 zeron-proto = { path = "crates/proto" }
 zeron-preview = { path = "crates/preview" }
 zeron-doc = { path = "crates/doc" }
@@ -47,14 +44,9 @@ zeron-syntax = { path = "crates/syntax" }
 zeron-markdown = { path = "crates/markdown" }
 zeron-theme = { path = "crates/theme" }
 zeron-mcp = { path = "crates/mcp" }
-zeron-text = { path = "crates/text" }
 
 # CRDT
 loro = "1.13"
-# Wire protocol for the SessionRoom DO rooms — official Rust twin of the npm
-# `loro-protocol` package the TS edge speaks (same monorepo, byte-identical
-# frames, cross-checked by its js_snapshots tests).
-loro-protocol = "0.3"
 
 # gpui — zeronsh/zui, extracted from wingleeio/zed e2ddcc6 with identical
 # crate sources; adds bounded blur passes and shared Gaussian weights.

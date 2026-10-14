@@ -17,8 +17,8 @@ Read `README.md` for the product overview, `ARCHITECTURE.md` for design context,
 - `crates/rpc/`: typed local and remote request/response/stream transports.
 - `crates/ui/`: GPUI desktop views, interactions, assets, and rendering fixtures. This is not a web frontend.
 - `crates/theme/`: theme schema, registry, validation, and imports.
-- `crates/markdown/`, `crates/text/`, and `crates/syntax/`: parsing, layout, and highlighting.
-- `crates/voice/`, `crates/voice-media/`, `crates/voice-session/`, `crates/audio/`, `crates/orb/`, and `crates/veil/`: voice, audio, and visual support.
+- `crates/markdown/` and `crates/syntax/`: parsing and highlighting.
+- `crates/voice/`, `crates/voice-media/`, `crates/voice-session/`, `crates/orb/`, and `crates/veil/`: voice and visual support.
 - `crates/preview/` and `crates/mcp/`: preview and MCP integration.
 - `scripts/`, `dist/`, and `.github/`: fixtures, packaging, platform integration, and CI.
 

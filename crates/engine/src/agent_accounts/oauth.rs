@@ -71,8 +71,8 @@ impl AgentAccounts {
              &code_challenge_method=S256&id_token_add_organizations=true\
              &codex_cli_simplified_flow=true&state={state}&originator={originator}",
             self.inner.endpoints.openai_auth.trim_end_matches('/'),
-            urlencode(&redirect),
-            urlencode(OPENAI_SCOPES),
+            url_encode(&redirect),
+            url_encode(OPENAI_SCOPES),
         );
         let task_state = Arc::new(Mutex::new(TaskLoginState {
             url: Some(url.clone()),

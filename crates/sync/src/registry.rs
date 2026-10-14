@@ -24,6 +24,7 @@ use tokio_tungstenite::tungstenite::Message as WsMessage;
 
 use zeron_doc::{PendingBatch, RegistryDoc, RegistryRow, StateOutcome};
 
+use crate::store::now_ms;
 use crate::types::{RoomStatsSnapshot, StaticUrl, SyncError, UrlProvider};
 
 /// Bound on one dial attempt (URL fetch + WS handshake).
@@ -143,10 +144,6 @@ pub(crate) struct TextPipe {
     pub(crate) rx: mpsc::Receiver<String>,
 }
 
-pub(crate) trait TextConnector: Send + Sync + 'static {
-    fn connect(&self) -> BoxFuture<'static, Result<TextPipe, SyncError>>;
-}
-
 /// Plain-HTTPS pull/push seam — the airplane-wifi transport. `fetch` GETs
 /// `/registry/{org}/rows?since=` (the WS hello's exact delta answer as JSON);
 /// `push` POSTs one op batch to `/registry/{org}/push` and returns the ack
@@ -160,7 +157,7 @@ struct WsTextConnector {
     url: Arc<dyn UrlProvider>,
 }
 
-impl TextConnector for WsTextConnector {
+impl WsTextConnector {
     fn connect(&self) -> BoxFuture<'static, Result<TextPipe, SyncError>> {
         let provider = self.url.clone();
         Box::pin(async move {
@@ -241,13 +238,6 @@ impl Stats {
     }
 }
 
-fn epoch_ms() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as i64)
-        .unwrap_or(0)
-}
-
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
@@ -319,8 +309,8 @@ impl RegistryClient {
         Self::connect_with_transport(connector, doc, device_id, tuning, Some(transport)).await
     }
 
-    pub(crate) async fn connect_with_transport(
-        connector: Arc<dyn TextConnector>,
+    async fn connect_with_transport(
+        connector: Arc<WsTextConnector>,
         doc: Arc<Mutex<RegistryDoc>>,
         device_id: &str,
         tuning: RegistryTuning,
@@ -455,7 +445,7 @@ impl Drop for RegistryClient {
 struct Actor {
     doc: Arc<Mutex<RegistryDoc>>,
     device_id: String,
-    connector: Arc<dyn TextConnector>,
+    connector: Arc<WsTextConnector>,
     tuning: RegistryTuning,
     events: broadcast::Sender<RegistryEvent>,
     shutdown: watch::Receiver<bool>,
@@ -626,7 +616,7 @@ impl Actor {
         };
         self.stats
             .retry_at_ms
-            .store(epoch_ms() + wait.as_millis() as i64, Relaxed);
+            .store(now_ms() + wait.as_millis() as i64, Relaxed);
         let waited = tokio::select! {
             _ = tokio::time::sleep(wait) => Waited::Elapsed,
             _ = wake.recv() => Waited::Woke,
@@ -714,7 +704,7 @@ impl Actor {
         }
         self.stats.connected.store(true, Relaxed);
         self.stats.synced.store(true, Relaxed);
-        self.stats.last_pushed_ms.store(epoch_ms(), Relaxed);
+        self.stats.last_pushed_ms.store(now_ms(), Relaxed);
         self.stats.retry_at_ms.store(0, Relaxed);
         *lock(&self.stats.last_failure) = None;
         if ready.is_none() {
@@ -842,7 +832,7 @@ impl Actor {
                         match parsed {
                             Some((b, seq)) => {
                                 lock(&doc).ack_batch(&b, seq);
-                                stats.last_ack_ms.store(epoch_ms(), Relaxed);
+                                stats.last_ack_ms.store(now_ms(), Relaxed);
                                 let _ = events.send(RegistryEvent::Applied);
                             }
                             None => {
@@ -896,7 +886,7 @@ impl Actor {
                             }
                             drop(map);
                             stats.synced.store(true, Relaxed);
-                            stats.last_pushed_ms.store(epoch_ms(), Relaxed);
+                            stats.last_pushed_ms.store(now_ms(), Relaxed);
                             let _ = events.send(RegistryEvent::Applied);
                         }
                         Err(err) => {
@@ -940,7 +930,7 @@ impl Actor {
         match frame {
             ServerFrame::Rows { seq, rows } => {
                 let contiguous = lock(&self.doc).apply_rows(seq, rows);
-                self.stats.last_pushed_ms.store(epoch_ms(), Relaxed);
+                self.stats.last_pushed_ms.store(now_ms(), Relaxed);
                 let _ = self.events.send(RegistryEvent::Applied);
                 if !contiguous {
                     // Frames between the cursor and this batch were missed;
@@ -952,7 +942,7 @@ impl Actor {
             }
             ServerFrame::Ack { batch, seq, .. } => {
                 lock(&self.doc).ack_batch(&batch, seq);
-                self.stats.last_ack_ms.store(epoch_ms(), Relaxed);
+                self.stats.last_ack_ms.store(now_ms(), Relaxed);
                 let _ = self.events.send(RegistryEvent::Applied);
             }
             ServerFrame::Presence { device, at } => {
@@ -960,7 +950,7 @@ impl Actor {
                 let _ = self.events.send(RegistryEvent::Presence);
             }
             ServerFrame::ProbeOk { .. } => {
-                self.stats.last_pushed_ms.store(epoch_ms(), Relaxed);
+                self.stats.last_pushed_ms.store(now_ms(), Relaxed);
             }
             ServerFrame::State {
                 seq,

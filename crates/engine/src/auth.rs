@@ -23,6 +23,8 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 use std::time::{Duration, Instant};
 
+use base64::Engine as _;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD as BASE64_URL;
 use futures::FutureExt;
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -1200,35 +1202,11 @@ struct JwtClaims {
 /// malformed token yields `None`, never a panic.
 fn jwt_claims(token: &str) -> Option<JwtClaims> {
     let payload = token.split('.').nth(1)?;
-    let bytes = base64url_decode(payload)?;
+    let bytes = BASE64_URL.decode(payload.trim_end_matches('=')).ok()?;
     serde_json::from_slice(&bytes).ok()
 }
 
-fn base64url_decode(input: &str) -> Option<Vec<u8>> {
-    let mut out = Vec::with_capacity(input.len() * 3 / 4 + 3);
-    let mut acc: u32 = 0;
-    let mut bits = 0u32;
-    for byte in input.bytes() {
-        let value = match byte {
-            b'A'..=b'Z' => byte - b'A',
-            b'a'..=b'z' => byte - b'a' + 26,
-            b'0'..=b'9' => byte - b'0' + 52,
-            b'-' | b'+' => 62,
-            b'_' | b'/' => 63,
-            b'=' => continue,
-            _ => return None,
-        };
-        acc = (acc << 6) | u32::from(value);
-        bits += 6;
-        if bits >= 8 {
-            bits -= 8;
-            out.push((acc >> bits) as u8);
-        }
-    }
-    Some(out)
-}
-
-fn url_encode(input: &str) -> String {
+pub(crate) fn url_encode(input: &str) -> String {
     let mut out = String::with_capacity(input.len());
     for byte in input.bytes() {
         match byte {
@@ -1358,33 +1336,7 @@ mod tests {
     #[test]
     fn base64url_round_trips_jwt_payload() {
         let payload = br#"{"exp":100,"iat":40,"org_id":"org_1"}"#;
-        // Standard base64url without padding (as JWTs use).
-        let encoded = {
-            const ALPHABET: &[u8] =
-                b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
-            let mut out = String::new();
-            for chunk in payload.chunks(3) {
-                let b = [
-                    chunk[0],
-                    *chunk.get(1).unwrap_or(&0),
-                    *chunk.get(2).unwrap_or(&0),
-                ];
-                let n = (u32::from(b[0]) << 16) | (u32::from(b[1]) << 8) | u32::from(b[2]);
-                out.push(ALPHABET[(n >> 18) as usize & 63] as char);
-                out.push(ALPHABET[(n >> 12) as usize & 63] as char);
-                if chunk.len() > 1 {
-                    out.push(ALPHABET[(n >> 6) as usize & 63] as char);
-                }
-                if chunk.len() > 2 {
-                    out.push(ALPHABET[n as usize & 63] as char);
-                }
-            }
-            out
-        };
-        assert_eq!(
-            base64url_decode(&encoded).as_deref(),
-            Some(payload.as_slice())
-        );
+        let encoded = BASE64_URL.encode(payload);
         let token = format!("h.{encoded}.sig");
         let claims = jwt_claims(&token).expect("claims decode");
         assert_eq!(claims.exp, Some(100));

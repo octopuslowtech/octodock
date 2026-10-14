@@ -26,6 +26,7 @@ use zeron_proto::{
 };
 use zeron_rpc::RpcError;
 
+use crate::repos::hex;
 use crate::workspace_search::{IndexState, NameKinds, normalize_name_query};
 use crate::{Repos, WorkspaceHost, WorkspaceSearch};
 
@@ -2308,16 +2309,6 @@ fn decode_cursor(cursor: &str) -> Result<DirectoryCursor, WorkspaceFilesError> {
         .ok_or_else(|| WorkspaceFilesError::BadParams("invalid directory cursor".into()))?;
     serde_json::from_slice(&bytes)
         .map_err(|_| WorkspaceFilesError::BadParams("invalid directory cursor".into()))
-}
-
-fn hex(bytes: &[u8]) -> String {
-    const DIGITS: &[u8; 16] = b"0123456789abcdef";
-    let mut output = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        output.push(DIGITS[(byte >> 4) as usize] as char);
-        output.push(DIGITS[(byte & 0x0f) as usize] as char);
-    }
-    output
 }
 
 fn decode_hex(value: &str) -> Option<Vec<u8>> {
