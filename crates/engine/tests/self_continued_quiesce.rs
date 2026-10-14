@@ -12,6 +12,9 @@
 //! are process-global: here the NORMAL window is set far beyond the test
 //! horizon, so a fast park can only have come through the short path.
 
+mod support;
+use support::{run_request, wait_for};
+
 use std::sync::{Arc, Once};
 use std::time::Duration;
 
@@ -23,8 +26,8 @@ use tokio::sync::{Mutex, mpsc};
 use zeron_engine::{EngineCore, HarnessRegistry};
 use zeron_harness::{Harness, HarnessError, RunControls};
 use zeron_proto::{
-    AgentEvent, DoneStatus, HarnessId, Model, ReasoningLevel, RunRequest, SandboxLevel,
-    SessionStatus, SteeringMode,
+    AgentEvent, DoneStatus, HarnessId, Model, ReasoningLevel, RunRequest, SessionStatus,
+    SteeringMode,
 };
 
 const CHAT: &str = "chat-self-quiesce";
@@ -44,23 +47,6 @@ fn init_env() {
             std::env::set_var("ZERON_SELF_TURN_QUIESCE_MS", SELF_QUIESCE_MS.to_string());
         }
     });
-}
-
-fn run_request(prompt: &str) -> RunRequest {
-    RunRequest {
-        mcp: None,
-        prompt: prompt.into(),
-        harness: None,
-        model: None,
-        reasoning: None,
-        model_options: Default::default(),
-        cwd: "/tmp".into(),
-        sandbox: SandboxLevel::WorkspaceWrite,
-        auto_approve: true,
-        attachments: Vec::new(),
-        worktree: None,
-        resume: None,
-    }
 }
 
 fn done(status: DoneStatus) -> AgentEvent {
@@ -191,20 +177,6 @@ fn assemble(main_prompt: &str) -> Rig {
 
 fn status(core: &EngineCore) -> Option<SessionStatus> {
     core.sessions.session_status(CHAT).map(|s| s.status)
-}
-
-async fn wait_for<F>(mut predicate: F, what: &str)
-where
-    F: FnMut() -> bool,
-{
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-    while !predicate() {
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "timed out waiting for {what}"
-        );
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
 }
 
 #[tokio::test]

@@ -9,31 +9,14 @@
 //! full capture whose row writes triggered the next reconcile. These tests pin
 //! the two dampers: memoized identity resolution and the orphan grace period.
 
+mod support;
+use support::{assemble, git};
+
 use std::path::Path;
-use std::sync::Arc;
 use std::time::Duration;
 
-use zeron_engine::{CheckoutDiffSync, EngineCore, HarnessRegistry};
+use zeron_engine::{CheckoutDiffSync, EngineCore};
 use zeron_proto::CheckoutDiff;
-
-async fn git(cwd: &Path, args: &[&str]) {
-    let output = tokio::process::Command::new("git")
-        .args(args)
-        .current_dir(cwd)
-        .env("GIT_AUTHOR_NAME", "test")
-        .env("GIT_AUTHOR_EMAIL", "test@test")
-        .env("GIT_COMMITTER_NAME", "test")
-        .env("GIT_COMMITTER_EMAIL", "test@test")
-        .output()
-        .await
-        .expect("git spawns");
-    assert!(
-        output.status.success(),
-        "git {:?} failed: {}",
-        args,
-        String::from_utf8_lossy(&output.stderr)
-    );
-}
 
 /// Init a repo at `dir` with one committed file and one dirty edit.
 async fn init_dirty_repo(dir: &Path) {
@@ -43,17 +26,6 @@ async fn init_dirty_repo(dir: &Path) {
     git(dir, &["add", "."]).await;
     git(dir, &["commit", "-m", "initial"]).await;
     std::fs::write(dir.join("a.txt"), "one\ntwo\nedited\n").expect("dirty tree");
-}
-
-fn assemble(dir: &Path) -> EngineCore {
-    std::fs::create_dir_all(dir).expect("data dir");
-    EngineCore::assemble(
-        dir,
-        Arc::new(HarnessRegistry::new()),
-        zeron_proto::HarnessId::Mock,
-        None,
-    )
-    .expect("engine assembles")
 }
 
 /// Poll `sync`'s watch until a diff for some checkout appears (or panic).

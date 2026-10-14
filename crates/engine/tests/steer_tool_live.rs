@@ -4,15 +4,15 @@
 //! the steer is answered.
 //!
 //! ZERON_TEST_HARNESS=claude cargo test -p zeron-engine --test steer_tool_live -- --ignored --nocapture
+mod support;
+use support::{harness, text};
+
 use std::{
     sync::Arc,
     time::{Duration, Instant},
 };
-use zeron_doc::{MessagePart, MessageRole, SessionCommandPayload, SessionMessageEntry};
+use zeron_doc::{MessageRole, SessionCommandPayload, SessionMessageEntry};
 use zeron_engine::{EngineCore, HarnessRegistry};
-use zeron_harness::{
-    AcpHarness, ClaudeHarness, CodexHarness, CursorHarness, Harness, OpencodeHarness,
-};
 use zeron_proto::{ChatConfig, McpServer, RunRequest, SandboxLevel, SessionStatus};
 
 const CHAT: &str = "steer-tool";
@@ -43,33 +43,6 @@ for line in sys.stdin:
         r = {}
     print(json.dumps({"jsonrpc": "2.0", "id": m["id"], "result": r}), flush=True)
 "#;
-
-fn harness(name: &str) -> Arc<dyn Harness> {
-    match name {
-        "claude" => Arc::new(ClaudeHarness::new()),
-        "codex" => Arc::new(CodexHarness::new()),
-        "cursor" => Arc::new(CursorHarness::new()),
-        "opencode" => Arc::new(OpencodeHarness::new()),
-        "grok" => Arc::new(AcpHarness::grok()),
-        "devin" => Arc::new(AcpHarness::devin()),
-        "hermes" => Arc::new(AcpHarness::hermes()),
-        "pi" => Arc::new(zeron_harness::PiHarness::new()),
-        "antigravity" => Arc::new(AcpHarness::antigravity()),
-        _ => panic!("unknown harness {name}"),
-    }
-}
-
-fn text(entry: &SessionMessageEntry) -> String {
-    entry
-        .parts
-        .iter()
-        .filter_map(|p| match p {
-            MessagePart::Text { text, .. } => Some(text.as_str()),
-            _ => None,
-        })
-        .collect::<Vec<_>>()
-        .join("")
-}
 
 fn dump(entries: &[SessionMessageEntry]) -> String {
     entries

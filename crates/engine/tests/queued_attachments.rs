@@ -5,6 +5,9 @@
 //! blocking pre-step in FRONT of QueueCommand, so a dead peer link killed the
 //! send instead of queueing it).
 
+mod support;
+use support::wait_for;
+
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -83,20 +86,6 @@ impl Harness for AckHarness {
             }),
         ];
         Ok(futures::stream::iter(events).boxed())
-    }
-}
-
-async fn wait_for<F>(mut predicate: F, what: &str)
-where
-    F: FnMut() -> bool,
-{
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-    while !predicate() {
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "timed out waiting for {what}"
-        );
-        tokio::time::sleep(Duration::from_millis(15)).await;
     }
 }
 

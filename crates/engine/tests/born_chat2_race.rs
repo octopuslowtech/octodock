@@ -8,8 +8,10 @@
 //! (suppressing every snapshot save), and the transcript vanished on the
 //! next restart. An absent row must mean "being born on chat2".
 
+mod support;
+use support::wait_for;
+
 use std::sync::Arc;
-use std::time::Duration;
 
 use async_trait::async_trait;
 use futures::StreamExt;
@@ -81,20 +83,6 @@ fn assemble(dir: &std::path::Path) -> EngineCore {
     registry.register(Arc::new(OneLinerHarness));
     EngineCore::assemble(dir, Arc::new(registry), HarnessId::Mock, None)
         .expect("engine core assembles")
-}
-
-async fn wait_for<F>(mut predicate: F, what: &str)
-where
-    F: FnMut() -> bool,
-{
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-    while !predicate() {
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "timed out waiting for {what}"
-        );
-        tokio::time::sleep(Duration::from_millis(15)).await;
-    }
 }
 
 fn entries(core: &EngineCore) -> Vec<SessionMessageEntry> {

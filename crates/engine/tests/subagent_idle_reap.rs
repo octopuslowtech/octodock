@@ -7,6 +7,9 @@
 //! stamp every still-running subagent `failed` — the "subagents die after
 //! ~20 minutes and can't be resumed" report.
 
+mod support;
+use support::{run_request, wait_for};
+
 use std::sync::{Arc, Once};
 use std::time::Duration;
 
@@ -19,8 +22,8 @@ use zeron_doc::{MessagePart, SessionMessageEntry, SubagentStatus};
 use zeron_engine::{EngineCore, HarnessRegistry};
 use zeron_harness::{Harness, HarnessError, RunControls};
 use zeron_proto::{
-    AgentEvent, DoneStatus, HarnessId, Model, ReasoningLevel, RunRequest, SandboxLevel,
-    SessionStatus, SteeringMode, ToolCall,
+    AgentEvent, DoneStatus, HarnessId, Model, ReasoningLevel, RunRequest, SessionStatus,
+    SteeringMode, ToolCall,
 };
 
 const CHAT: &str = "chat-subagent-reap";
@@ -36,23 +39,6 @@ fn init_env() {
         // exists in this test process; all tests share the one value.
         unsafe { std::env::set_var("ZERON_SESSION_IDLE_MS", IDLE_MS.to_string()) };
     });
-}
-
-fn run_request(prompt: &str) -> RunRequest {
-    RunRequest {
-        mcp: None,
-        prompt: prompt.into(),
-        harness: None,
-        model: None,
-        reasoning: None,
-        model_options: Default::default(),
-        cwd: "/tmp".into(),
-        sandbox: SandboxLevel::WorkspaceWrite,
-        auto_approve: true,
-        attachments: Vec::new(),
-        worktree: None,
-        resume: None,
-    }
 }
 
 fn done(status: DoneStatus) -> AgentEvent {
@@ -158,20 +144,6 @@ fn chip_status(core: &EngineCore) -> Option<SubagentStatus> {
             } if id == SPAWN => *subagent_status,
             _ => None,
         })
-}
-
-async fn wait_for<F>(mut predicate: F, what: &str)
-where
-    F: FnMut() -> bool,
-{
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-    while !predicate() {
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "timed out waiting for {what}"
-        );
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
 }
 
 /// A parked session: the parent spawned a background subagent and finished

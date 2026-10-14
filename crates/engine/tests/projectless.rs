@@ -6,8 +6,10 @@
 //! literal `~`). Chats from before scratch folders keep `~` and the host's
 //! REAL home dir, so their harness sessions still resume.
 
+mod support;
+use support::wait_for;
+
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 
 use async_trait::async_trait;
 use futures::StreamExt;
@@ -80,20 +82,6 @@ impl Harness for RecordingHarness {
             }),
         ];
         Ok(futures::stream::iter(events).boxed())
-    }
-}
-
-async fn wait_for<F>(mut predicate: F, what: &str)
-where
-    F: FnMut() -> bool,
-{
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-    while !predicate() {
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "timed out waiting for {what}"
-        );
-        tokio::time::sleep(Duration::from_millis(15)).await;
     }
 }
 

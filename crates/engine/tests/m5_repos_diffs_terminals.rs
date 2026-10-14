@@ -1,8 +1,10 @@
 //! M5a integration: repos/worktrees, folder listing, checkout-diff capture + sync,
 //! terminals, and the RPC dispatch for each new method over the memory transport.
 
+mod support;
+use support::{assemble, git};
+
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::time::Duration;
 
 #[cfg(target_os = "linux")]
@@ -12,9 +14,8 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 
 use zeron_engine::{
-    EngineCore, HarnessRegistry, Repos, Terminals, capture_commit_diff, capture_diff,
-    capture_diff_against, capture_turn_diff, discard_working_tree, merge_base, read_diff_file_text,
-    snapshot_tree, working_diff_base,
+    Repos, Terminals, capture_commit_diff, capture_diff, capture_diff_against, capture_turn_diff,
+    discard_working_tree, merge_base, read_diff_file_text, snapshot_tree, working_diff_base,
 };
 use zeron_proto::{
     CreateWorktreeOutcome, GitHistoryRefKind, ProjectActionDraft, ProjectActionIcon,
@@ -25,25 +26,6 @@ use zeron_rpc::methods;
 // ---------------------------------------------------------------------------
 // Fixtures
 // ---------------------------------------------------------------------------
-
-async fn git(cwd: &Path, args: &[&str]) {
-    let output = tokio::process::Command::new("git")
-        .args(args)
-        .current_dir(cwd)
-        .env("GIT_AUTHOR_NAME", "test")
-        .env("GIT_AUTHOR_EMAIL", "test@test")
-        .env("GIT_COMMITTER_NAME", "test")
-        .env("GIT_COMMITTER_EMAIL", "test@test")
-        .output()
-        .await
-        .expect("git spawns");
-    assert!(
-        output.status.success(),
-        "git {:?} failed: {}",
-        args,
-        String::from_utf8_lossy(&output.stderr)
-    );
-}
 
 async fn git_stdout(cwd: &Path, args: &[&str]) -> String {
     let output = tokio::process::Command::new("git")
@@ -72,17 +54,6 @@ async fn init_repo(dir: &Path) {
 
 fn test_repos(data_dir: &Path) -> Repos {
     Repos::with_worktrees_root(data_dir, "device-test", data_dir.join("worktrees"))
-}
-
-fn assemble(dir: &Path) -> EngineCore {
-    std::fs::create_dir_all(dir).expect("data dir");
-    EngineCore::assemble(
-        dir,
-        Arc::new(HarnessRegistry::new()),
-        zeron_proto::HarnessId::Mock,
-        None,
-    )
-    .expect("engine assembles")
 }
 
 fn decoded(events: &[TerminalEvent]) -> String {
@@ -267,18 +238,33 @@ async fn repository_identity_spans_worktrees_and_clones() {
     assert_eq!(repos.repository_identity(&linked).await.unwrap(), identity);
     git(
         &repo,
-        &["remote", "add", "origin", "git@github-alias:zeronsh/old-name.git"],
+        &[
+            "remote",
+            "add",
+            "origin",
+            "git@github-alias:zeronsh/old-name.git",
+        ],
     )
     .await;
     let clone = temp.path().join("clone");
     git(
         temp.path(),
-        &["clone", "-q", repo.to_str().unwrap(), clone.to_str().unwrap()],
+        &[
+            "clone",
+            "-q",
+            repo.to_str().unwrap(),
+            clone.to_str().unwrap(),
+        ],
     )
     .await;
     git(
         &clone,
-        &["remote", "set-url", "origin", "https://github.com/zeronsh/new-name"],
+        &[
+            "remote",
+            "set-url",
+            "origin",
+            "https://github.com/zeronsh/new-name",
+        ],
     )
     .await;
     assert_eq!(repos.repository_identity(&repo).await.unwrap(), identity);
@@ -352,7 +338,12 @@ async fn repository_identity_spans_worktrees_and_clones() {
     .await;
     git(
         &shallow,
-        &["remote", "set-url", "origin", "https://GitHub.com/ZeronSH/Zeron.git"],
+        &[
+            "remote",
+            "set-url",
+            "origin",
+            "https://GitHub.com/ZeronSH/Zeron.git",
+        ],
     )
     .await;
     assert_eq!(
@@ -369,7 +360,12 @@ async fn repository_identity_spans_worktrees_and_clones() {
     assert!(local.starts_with("local:"), "{local}");
     git(
         &empty,
-        &["remote", "add", "upstream", "git@github.com:Anara/Comet.git"],
+        &[
+            "remote",
+            "add",
+            "upstream",
+            "git@github.com:Anara/Comet.git",
+        ],
     )
     .await;
     assert_eq!(

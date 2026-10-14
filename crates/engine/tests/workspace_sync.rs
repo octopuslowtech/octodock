@@ -7,6 +7,9 @@
 //! variant against a real edge runs behind `#[ignore]` (ZERON_EDGE_WS, like
 //! zeron-sync's edge_convergence test).
 
+mod support;
+use support::{run_request, wait_for};
+
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -127,37 +130,6 @@ async fn bridge(
     a.workspace.connect_registry_url(&server.url());
     b.workspace.connect_registry_url(&server.url());
     server
-}
-
-async fn wait_for<F>(mut predicate: F, what: &str)
-where
-    F: FnMut() -> bool,
-{
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-    while !predicate() {
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "timed out waiting for {what}"
-        );
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
-}
-
-fn run_request(prompt: &str) -> RunRequest {
-    RunRequest {
-        mcp: None,
-        prompt: prompt.into(),
-        harness: None,
-        model: None,
-        reasoning: None,
-        model_options: Default::default(),
-        cwd: "/tmp".into(),
-        sandbox: SandboxLevel::WorkspaceWrite,
-        auto_approve: true,
-        attachments: Vec::new(),
-        worktree: None,
-        resume: None,
-    }
 }
 
 /// Queue a run command into a chat doc the way a remote viewer would (ledger rule 1).

@@ -17,6 +17,9 @@
 //! stream goes silent after completed output with nothing in flight —
 //! without ending the run, so a false trip costs a status dip, not content.
 
+mod support;
+use support::{run_request, wait_for};
+
 use std::sync::{Arc, Once};
 use std::time::Duration;
 
@@ -29,8 +32,8 @@ use zeron_doc::{MessagePart, MessageRole, MessageStatus, SessionMessageEntry};
 use zeron_engine::{EngineCore, HarnessRegistry, SteerOutcome};
 use zeron_harness::{Harness, HarnessError, RunControls};
 use zeron_proto::{
-    AgentEvent, DoneStatus, HarnessId, Model, ReasoningLevel, RunRequest, SandboxLevel,
-    SessionStatus, SteeringMode, ToolCall,
+    AgentEvent, DoneStatus, HarnessId, Model, ReasoningLevel, RunRequest, SessionStatus,
+    SteeringMode, ToolCall,
 };
 
 const CHAT: &str = "chat-quiesce";
@@ -45,23 +48,6 @@ fn init_quiesce_env() {
         // exists in this test process; all tests share the one value.
         unsafe { std::env::set_var("ZERON_TURN_QUIESCE_MS", QUIESCE_MS.to_string()) };
     });
-}
-
-fn run_request(prompt: &str) -> RunRequest {
-    RunRequest {
-        mcp: None,
-        prompt: prompt.into(),
-        harness: None,
-        model: None,
-        reasoning: None,
-        model_options: Default::default(),
-        cwd: "/tmp".into(),
-        sandbox: SandboxLevel::WorkspaceWrite,
-        auto_approve: true,
-        attachments: Vec::new(),
-        worktree: None,
-        resume: None,
-    }
 }
 
 fn done(status: DoneStatus) -> AgentEvent {
@@ -228,20 +214,6 @@ fn assistant_texts(core: &EngineCore) -> Vec<(String, Option<MessageStatus>)> {
             (text, e.status)
         })
         .collect()
-}
-
-async fn wait_for<F>(mut predicate: F, what: &str)
-where
-    F: FnMut() -> bool,
-{
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-    while !predicate() {
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "timed out waiting for {what}"
-        );
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
 }
 
 /// Steps 1+2 of the incident: a completed turn parks the session; the agent

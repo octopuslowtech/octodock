@@ -5,6 +5,9 @@
 //! Account tests use explicit `AgentAccountsConfig` paths under a tempdir (never
 //! the real `~/.claude` / `~/.codex`), so they are hermetic and parallel-safe.
 
+mod support;
+use support::git;
+
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -166,25 +169,6 @@ fn assemble_with_mock(dir: &Path, script: Vec<AgentEvent>) -> EngineCore {
     let registry = HarnessRegistry::new();
     registry.register(Arc::new(MockHarness { script }));
     EngineCore::assemble(dir, Arc::new(registry), HarnessId::Mock, None).expect("engine assembles")
-}
-
-async fn git(cwd: &Path, args: &[&str]) {
-    let output = tokio::process::Command::new("git")
-        .args(args)
-        .current_dir(cwd)
-        .env("GIT_AUTHOR_NAME", "test")
-        .env("GIT_AUTHOR_EMAIL", "test@test")
-        .env("GIT_COMMITTER_NAME", "test")
-        .env("GIT_COMMITTER_EMAIL", "test@test")
-        .output()
-        .await
-        .expect("git spawns");
-    assert!(
-        output.status.success(),
-        "git {:?} failed: {}",
-        args,
-        String::from_utf8_lossy(&output.stderr)
-    );
 }
 
 async fn init_repo(dir: &Path) {

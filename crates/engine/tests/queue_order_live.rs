@@ -6,42 +6,15 @@
 //! ZERON_TEST_HARNESS=pi cargo test -p zeron-engine --test queue_order_live -- --ignored --nocapture
 //! ZERON_TEST_MODEL optionally pins the model; ZERON_TEST_SCENARIO runs one of
 //! `sends`, `queue`, `steer`.
+mod support;
+use support::{harness, text};
+
 use std::{sync::Arc, time::Duration};
 use zeron_doc::{MessagePart, MessageRole, SessionCommandPayload, SessionMessageEntry};
 use zeron_engine::{EngineCore, HarnessRegistry};
-use zeron_harness::{
-    AcpHarness, ClaudeHarness, CodexHarness, CursorHarness, Harness, OpencodeHarness,
-};
 use zeron_proto::{ChatConfig, HarnessId, RunRequest, SandboxLevel, SessionStatus};
 
 const CHAT: &str = "order";
-
-fn harness(name: &str) -> Arc<dyn Harness> {
-    match name {
-        "claude" => Arc::new(ClaudeHarness::new()),
-        "codex" => Arc::new(CodexHarness::new()),
-        "cursor" => Arc::new(CursorHarness::new()),
-        "opencode" => Arc::new(OpencodeHarness::new()),
-        "grok" => Arc::new(AcpHarness::grok()),
-        "devin" => Arc::new(AcpHarness::devin()),
-        "hermes" => Arc::new(AcpHarness::hermes()),
-        "pi" => Arc::new(zeron_harness::PiHarness::new()),
-        "antigravity" => Arc::new(AcpHarness::antigravity()),
-        _ => panic!("unknown harness {name}"),
-    }
-}
-
-fn text(entry: &SessionMessageEntry) -> String {
-    entry
-        .parts
-        .iter()
-        .filter_map(|p| match p {
-            MessagePart::Text { text, .. } => Some(text.as_str()),
-            _ => None,
-        })
-        .collect::<Vec<_>>()
-        .join("")
-}
 
 fn dump(entries: &[SessionMessageEntry]) -> String {
     entries

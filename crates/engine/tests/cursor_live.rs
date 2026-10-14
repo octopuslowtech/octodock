@@ -1,5 +1,8 @@
 //! Opt-in production engine + Cursor SDK checks. Uses real account quota.
 //! ZERON_CURSOR_STATE_DIR=$(mktemp -d) cargo test -p zeron-engine --test cursor_live -- --ignored --nocapture --test-threads=1
+mod support;
+use support::text;
+
 use std::{sync::Arc, time::Duration};
 use zeron_doc::{
     MessagePart, MessageRole, MessageStatus, SessionCommandPayload, SessionMessageEntry,
@@ -47,17 +50,6 @@ fn entries(core: &EngineCore) -> Vec<SessionMessageEntry> {
         .doc()
         .read_entries()
         .unwrap()
-}
-fn text(entry: &SessionMessageEntry) -> String {
-    entry
-        .parts
-        .iter()
-        .filter_map(|p| match p {
-            MessagePart::Text { text, .. } => Some(text.as_str()),
-            _ => None,
-        })
-        .collect::<Vec<_>>()
-        .join("")
 }
 async fn wait(mut predicate: impl FnMut() -> bool, what: &str) {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(300);
