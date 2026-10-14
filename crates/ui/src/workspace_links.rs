@@ -4,6 +4,8 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::path::{Component, Path, PathBuf};
 
+use zeron_proto::file_mentions::{percent_decode_path, percent_encode_path};
+
 const FILE_MENTION_SCHEME: &str = "zeron-file:";
 
 /// Where a classified file link sits relative to a surface's ordered roots.
@@ -194,9 +196,8 @@ pub(crate) fn resolve_inline_code_path(
         // target the link grammar rejects, turning the span into a dead link,
         // so it keeps its inline-code look instead.
         let path = path.to_string_lossy();
-        path.starts_with('/').then(|| {
-            InlineCodePath::File(format!("file://{}{anchor}", percent_encode_path(&path)))
-        })
+        path.starts_with('/')
+            .then(|| InlineCodePath::File(format!("file://{}{anchor}", percent_encode_path(&path))))
     };
     if let Some(rest) = decoded.strip_prefix("~/") {
         let home = std::env::var_os("HOME").filter(|home| !home.is_empty())?;
@@ -617,36 +618,6 @@ fn has_url_scheme(path: &str) -> bool {
 
 fn positive_number(value: &str) -> Option<u32> {
     value.parse::<u32>().ok().filter(|number| *number > 0)
-}
-
-fn percent_decode_path(encoded: &str) -> Option<String> {
-    let raw = encoded.as_bytes();
-    let mut bytes = Vec::with_capacity(raw.len());
-    let mut at = 0;
-    while at < raw.len() {
-        if raw[at] == b'%' {
-            let hex = std::str::from_utf8(raw.get(at + 1..at + 3)?).ok()?;
-            bytes.push(u8::from_str_radix(hex, 16).ok()?);
-            at += 3;
-        } else {
-            bytes.push(raw[at]);
-            at += 1;
-        }
-    }
-    String::from_utf8(bytes).ok()
-}
-
-fn percent_encode_path(path: &str) -> String {
-    let mut out = String::new();
-    for byte in path.bytes() {
-        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~' | b'/') {
-            out.push(byte as char);
-        } else {
-            out.push('%');
-            out.push_str(&format!("{byte:02X}"));
-        }
-    }
-    out
 }
 
 #[cfg(test)]

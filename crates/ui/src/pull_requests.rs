@@ -1004,7 +1004,10 @@ impl PullRequestsPage {
             return;
         };
         if !state.device_online(&device, Utc::now()) {
-            crate::toast::error(cx, "This device is offline. Reconnect it to open the project.");
+            crate::toast::error(
+                cx,
+                "This device is offline. Reconnect it to open the project.",
+            );
             cx.notify();
             return;
         }
@@ -1294,7 +1297,13 @@ impl PullRequestsPage {
                                     .flex()
                                     .items_baseline()
                                     .gap(px(6.0))
-                                    .child(div().flex_none().max_w_full().truncate().child(name.clone()))
+                                    .child(
+                                        div()
+                                            .flex_none()
+                                            .max_w_full()
+                                            .truncate()
+                                            .child(name.clone()),
+                                    )
                                     .when_some(detail, |el, detail| {
                                         el.child(
                                             div()
@@ -1311,8 +1320,6 @@ impl PullRequestsPage {
                                     "pr-project-resolving",
                                     1.5,
                                     theme.glyph,
-                                    cx.entity_id(),
-                                    cx,
                                 ))
                             })
                             // Disconnected glyph, as the device picker shows it.
@@ -1416,7 +1423,6 @@ impl PullRequestsPage {
                                 })),
                         ),
                 )
-
                 .when(!options.is_empty(), |el| {
                     el.child(
                         popover::menu_scroll_host("pr-repository-list-host")
@@ -1833,8 +1839,6 @@ impl PullRequestsPage {
                                 "pull-requests-more-spinner",
                                 1.5,
                                 theme.glyph,
-                                cx.entity_id(),
-                                cx,
                             ))
                         })
                         .child(label)
@@ -2362,8 +2366,6 @@ impl Render for PullRequestsPage {
                                             "pull-requests-refresh-spinner",
                                             1.75,
                                             theme.glyph,
-                                            cx.entity_id(),
-                                            cx,
                                         )
                                         .into_any_element()
                                     } else {
@@ -2378,8 +2380,6 @@ impl Render for PullRequestsPage {
                             .child(self.render_device_switcher(&theme, cx)),
                     ),
             )
-
-
             .child(
                 div()
                     .mt(px(12.0))

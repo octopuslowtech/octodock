@@ -2,21 +2,10 @@
 //! and an accent plate for Stop. Each is a vertical gradient (lit from above),
 //! a hairline rim, an inner top highlight, and a soft drop. Dark appearances
 //! keep the structure with translucent white instead of opaque fills.
-use gpui::{
-    Background, BoxShadow, Hsla, Styled, hsla, linear_color_stop, linear_gradient, point, px,
-};
+use gpui::{Background, Hsla, Styled, hsla, linear_color_stop, linear_gradient};
 
+use crate::glass::shadow;
 use crate::theme::Theme;
-
-fn shadow(color: Hsla, y: f32, blur: f32, spread: f32, inset: bool) -> BoxShadow {
-    BoxShadow {
-        color,
-        offset: point(px(0.0), px(y)),
-        blur_radius: px(blur),
-        spread_radius: px(spread),
-        inset,
-    }
-}
 
 fn white(alpha: f32) -> Hsla {
     hsla(0.0, 0.0, 1.0, alpha)

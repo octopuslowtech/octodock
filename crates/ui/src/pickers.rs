@@ -51,7 +51,7 @@ fn workspace_footer_row() -> gpui::Div {
 use crate::composer::{ComposerInput, ComposerInputEvent};
 use crate::motion;
 use crate::popover::{self, Loadable, MenuKey};
-use crate::settings::composer::ComposerDefaults;
+use crate::settings::composer::{ComposerDefaults, RunPicks};
 use crate::state::{AppState, EngineHandle};
 use crate::theme::Theme;
 
@@ -970,6 +970,11 @@ impl Pickers {
             let space = state.read(cx).selected_space.clone();
             let device = state.read(cx).effective_device_id();
             let device_changed = device != this.device_owner;
+            if space != this.space_owner {
+                this.config.harness = None;
+                this.config.model = None;
+                this.config.reasoning = None;
+            }
             if space != this.space_owner || device_changed {
                 this.space_owner = space;
                 this.device_owner = device;
@@ -996,7 +1001,8 @@ impl Pickers {
                 } else {
                     this.harnesses = Loadable::Idle;
                 }
-                this.models.retain(|_, slot| matches!(slot, Loadable::Ready(_)));
+                this.models
+                    .retain(|_, slot| matches!(slot, Loadable::Ready(_)));
                 this.stale_models = this.models.keys().copied().collect();
                 this.revalidating.clear();
                 this.model_refresh_errors.clear();
@@ -1138,6 +1144,22 @@ impl Pickers {
         }
     }
 
+    fn picks_scope(&self, cx: &App) -> Option<String> {
+        let state = self.state.read(cx);
+        (!state.no_project)
+            .then(|| state.selected_space.clone())
+            .flatten()
+    }
+
+    fn picks(&self, cx: &App) -> &RunPicks {
+        self.defaults.picks(self.picks_scope(cx).as_deref())
+    }
+
+    fn picks_mut(&mut self, cx: &App) -> &mut RunPicks {
+        let scope = self.picks_scope(cx);
+        self.defaults.picks_mut(scope.as_deref())
+    }
+
     pub fn draft(&self) -> &DraftConfig {
         &self.config
     }
@@ -1205,7 +1227,7 @@ impl Pickers {
         // offer harnesses this device lacks, and what the chip shows must be
         // what a send would carry.
         let fresh = self.harnesses.ready().filter(|_| !self.harnesses_stale);
-        if let Some(harness) = self.defaults.harness {
+        if let Some(harness) = self.picks(cx).harness {
             let offered = match fresh {
                 Some(list) => offered_harnesses(list).iter().any(|d| d.id == harness),
                 None => true, // catalog not loaded yet — trust the memory
@@ -1237,7 +1259,7 @@ impl Pickers {
             return chat.config.as_ref().and_then(|c| c.model.as_deref());
         }
         let harness = self.effective_harness(cx)?;
-        self.defaults.model_for(harness).map(|m| m.id.as_str())
+        self.picks(cx).model_for(harness).map(|m| m.id.as_str())
     }
 
     /// Effective reasoning — always concrete once the model is known: the
@@ -1253,8 +1275,8 @@ impl Pickers {
                 // last-used level overall.
                 None => self
                     .effective_harness(cx)
-                    .and_then(|h| self.defaults.reasoning_for(h, self.effective_model_id(cx)))
-                    .or(self.defaults.reasoning),
+                    .and_then(|h| self.picks(cx).reasoning_for(h, self.effective_model_id(cx)))
+                    .or(self.picks(cx).reasoning),
             }
         })
     }
@@ -1295,8 +1317,8 @@ impl Pickers {
             return ModelName::Named(label.into());
         }
         // A list still from the previous device is loading for this one.
-        let catalog_loading = self.harnesses_stale
-            || matches!(self.harnesses, Loadable::Idle | Loadable::Loading);
+        let catalog_loading =
+            self.harnesses_stale || matches!(self.harnesses, Loadable::Idle | Loadable::Loading);
         let models_loading = self.effective_harness(cx).is_some_and(|harness| {
             !matches!(
                 self.models.get(&harness),
@@ -1316,7 +1338,7 @@ impl Pickers {
             .or_else(|| {
                 let remembered = self
                     .effective_harness(cx)
-                    .and_then(|h| self.defaults.model_for(h));
+                    .and_then(|h| self.picks(cx).model_for(h));
                 match self.effective_model_id(cx) {
                     Some(id) => Some(
                         remembered
@@ -1347,7 +1369,7 @@ impl Pickers {
         match self.selected_model(cx) {
             Some(model) => offered_options(
                 model,
-                self.defaults
+                self.picks(cx)
                     .model_options_for(harness, &model.id)
                     .cloned()
                     .unwrap_or_default(),
@@ -1356,7 +1378,7 @@ impl Pickers {
             // this exact model when made, so they are safe to send as-is.
             None => self
                 .effective_model_id(cx)
-                .and_then(|id| self.defaults.model_options_for(harness, id))
+                .and_then(|id| self.picks(cx).model_options_for(harness, id))
                 .cloned()
                 .unwrap_or_default(),
         }
@@ -2047,11 +2069,11 @@ impl Pickers {
             // A side-chat draft already has a selected row. Replace its inherited
             // provider settings so both the picker and first createChat use the
             // new harness, even when its model catalog has not loaded yet.
-            let model = self.defaults.model_for(harness).map(|m| m.id.clone());
-            let reasoning = self.defaults.reasoning_for(harness, model.as_deref());
+            let model = self.picks(cx).model_for(harness).map(|m| m.id.clone());
+            let reasoning = self.picks(cx).reasoning_for(harness, model.as_deref());
             let options = model
                 .as_deref()
-                .and_then(|model| self.defaults.model_options_for(harness, model))
+                .and_then(|model| self.picks(cx).model_options_for(harness, model))
                 .cloned()
                 .unwrap_or_default();
             self.update_chat_config(cx, move |config| {
@@ -2069,7 +2091,7 @@ impl Pickers {
         }
         self.config.harness = Some(harness);
         if self.title.is_none() {
-            self.defaults.harness = Some(harness);
+            self.picks_mut(cx).harness = Some(harness);
             self.save_defaults();
         }
         self.model_scroll_base().set_offset(gpui::Point::default());
@@ -2112,7 +2134,7 @@ impl Pickers {
                     .and_then(|models| models.iter().find(|m| m.id == model_id))
                     .map(|m| m.label.clone())
                     .unwrap_or_else(|| model_id.clone());
-                self.defaults.remember_model(harness, model_id, label);
+                self.picks_mut(cx).remember_model(harness, model_id, label);
                 self.save_defaults();
             }
         }
@@ -2127,10 +2149,10 @@ impl Pickers {
             self.config.reasoning = Some(level);
             if let Some(harness) = self.effective_harness(cx) {
                 let model = self.effective_model_id(cx).map(str::to_owned);
-                self.defaults
+                self.picks_mut(cx)
                     .remember_reasoning(harness, model.as_deref(), level);
             } else {
-                self.defaults.reasoning = Some(level);
+                self.picks_mut(cx).reasoning = Some(level);
             }
             self.save_defaults();
         }
@@ -2162,7 +2184,7 @@ impl Pickers {
         {
             // New chat: the pick is the sticky memory for the catalog model
             // that offered it — never stored unvalidated.
-            let options = self.defaults.model_options_mut(harness, &model);
+            let options = self.picks_mut(cx).model_options_mut(harness, &model);
             if default {
                 options.remove(&option_id);
             } else {
@@ -3420,6 +3442,10 @@ impl Pickers {
         // this picker's entity.
         let id: SharedString = format!("{base}-{}", cx.entity_id()).into();
         let open = self.open_kind() == Some(kind);
+        let effort_icon = (kind == PickerKind::Reasoning)
+            .then(|| self.compact_effort(cx))
+            .flatten()
+            .map(|e| Self::effort_bars(e.selected, e.labels.len()));
         let resizing = kind == PickerKind::HarnessModel && self.chip_resizing;
         // Ghost pill (zeron composer/styles.tsx `pill`): `h-8 rounded-lg px-2.5
         // gap-1.5 text-[12px] font-medium text-muted-foreground`, icons size-4,
@@ -3440,11 +3466,13 @@ impl Pickers {
             // The model trigger sits beside the right-hand composer actions.
             // Its own padding participates in that visible gap; footer and
             // destination triggers keep their wider independent hit areas.
-            .px(px(if matches!(kind, PickerKind::HarnessModel | PickerKind::Reasoning) {
-                6.0
-            } else {
-                10.0
-            }))
+            .px(px(
+                if matches!(kind, PickerKind::HarnessModel | PickerKind::Reasoning) {
+                    6.0
+                } else {
+                    10.0
+                },
+            ))
             .rounded(px(8.0))
             .text_size(crate::typography::ui_rems(12.0))
             .font_weight(gpui::FontWeight::MEDIUM)
@@ -3478,8 +3506,6 @@ impl Pickers {
                     "picker-chip-loader",
                     2.0,
                     theme.glyph,
-                    cx.entity_id(),
-                    cx,
                 )))
             })
             .when_some(
@@ -3492,6 +3518,7 @@ impl Pickers {
                     )
                 },
             )
+            .children(effort_icon)
             .when(label_loading, |el| {
                 // Nothing is named on screen: the label rolls in from empty.
                 rolling(format!("{id}-label"), SharedString::default(), true);
@@ -4013,8 +4040,7 @@ impl Pickers {
             .w(px(width))
             .h(px(self.menu_geometry().height.min(self.open_model_height)))
             .when(
-                self.compact_model_picker(cx)
-                    && self.mounted_kind() != Some(PickerKind::Reasoning),
+                self.compact_model_picker(cx) && self.mounted_kind() != Some(PickerKind::Reasoning),
                 |el| el.h(px(self.compact_motion.frame_height)),
             )
             .track_focus(&self.focus)
@@ -5141,7 +5167,7 @@ impl Pickers {
         let reasoning = clamp_reasoning(self.effective_reasoning(cx), &levels);
         let selections = offered_options(
             &row.model,
-            self.defaults
+            self.picks(cx)
                 .model_options_for(row.harness, &row.model.id)
                 .cloned()
                 .unwrap_or_default(),
@@ -5350,6 +5376,7 @@ impl Pickers {
             .compact_effort(cx)
             .map(|e| (e.labels, e.selected))
             .unwrap_or_default();
+        let count = labels.len();
         div()
             .id("reasoning-popover-body")
             .flex()
@@ -5370,6 +5397,7 @@ impl Pickers {
                         this.close(cx);
                         cx.stop_propagation();
                     }))
+                    .child(Self::effort_bars(ix, count))
                     .child(label)
                     .child(div().flex_1())
                     .when(ix == selected, |el| {
@@ -5381,6 +5409,33 @@ impl Pickers {
                     })
             }))
             .into_any_element()
+    }
+
+    fn effort_bars(selected: usize, count: usize) -> gpui::Div {
+        let color: gpui::Hsla = gpui::rgb(0x0096c7).into();
+        div()
+            .flex_none()
+            .flex()
+            .flex_row()
+            .items_end()
+            .gap(px(1.0))
+            .h(px(14.0))
+            .children((0..count).map(|ix| {
+                let rise = if count > 1 {
+                    ix as f32 / (count - 1) as f32
+                } else {
+                    1.0
+                };
+                div()
+                    .w(px(2.0))
+                    .h(px(4.0 + 10.0 * rise))
+                    .rounded(px(1.0))
+                    .bg(if ix <= selected {
+                        color
+                    } else {
+                        color.opacity(0.3)
+                    })
+            }))
     }
 
     /// Setting triggers for the tray or a hover card. Card rows stay out of
@@ -5685,7 +5740,7 @@ impl Pickers {
         self.config.harness = Some(HarnessId::Codex);
         self.config.model = Some("gpt-5.4".into());
         self.config.reasoning = None;
-        self.defaults
+        self.picks_mut(cx)
             .model_options_mut(HarnessId::Codex, "gpt-5.4")
             .clear();
         self.harnesses = Loadable::Ready(
@@ -6394,8 +6449,8 @@ impl Render for Pickers {
             }
         };
         // A list still from the previous device is loading for this one.
-        let catalog_loading = self.harnesses_stale
-            || matches!(self.harnesses, Loadable::Idle | Loadable::Loading);
+        let catalog_loading =
+            self.harnesses_stale || matches!(self.harnesses, Loadable::Idle | Loadable::Loading);
         // Harness unknown while the catalog resolves: the pixel-glyph loader
         // instead of guessing a brand mark.
         let chip_icon_loading = self.title.is_none()
@@ -6477,14 +6532,8 @@ impl Render for Pickers {
                 })
             })
         });
-        let chip_width = self.model_chip_width(
-            window,
-            &model_label,
-            None,
-            chip_label_loading,
-            fast,
-            cx,
-        );
+        let chip_width =
+            self.model_chip_width(window, &model_label, None, chip_label_loading, fast, cx);
         let model_chip = self
             .trigger_chip(
                 PickerKind::HarnessModel,
@@ -6530,7 +6579,13 @@ impl Render for Pickers {
                 &theme,
                 cx,
             );
-            attach_overlay_end(chip, &mut overlay, PickerKind::Reasoning, "reasoning-popover", closing)
+            attach_overlay_end(
+                chip,
+                &mut overlay,
+                PickerKind::Reasoning,
+                "reasoning-popover",
+                closing,
+            )
         });
         div()
             .flex()
@@ -6970,7 +7025,7 @@ mod tests {
                 .update(cx, |host, window, cx| {
                     host.pickers.update(cx, |pickers, cx| {
                         pickers.config.harness = None;
-                        pickers.defaults.harness = None;
+                        pickers.defaults.picks.harness = None;
                         pickers.harnesses = catalog;
                         cx.notify();
                     });
@@ -7192,6 +7247,7 @@ mod tests {
                     pickers.config.model = Some(model.into());
                     pickers
                         .defaults
+                        .picks
                         .model_options_mut(HarnessId::Codex, model)
                         .insert(
                             "serviceTier".into(),
@@ -7523,6 +7579,47 @@ mod tests {
     }
 
     #[gpui::test]
+    fn model_and_effort_picks_stay_with_their_project(cx: &mut gpui::TestAppContext) {
+        let state = cx.new(|_| {
+            let mut state = AppState::new();
+            state.local_device_id = Some("local".into());
+            state.apply_spaces(vec![git_space("a", "local"), git_space("b", "local")]);
+            state.selected_space = Some("a".into());
+            state
+        });
+        let pickers = cx.new(|cx| Pickers::new(state.clone(), cx));
+        let laddered = |id: &str, label: &str| {
+            let mut model = bare_model(id, label);
+            model.reasoning_levels = vec![ReasoningLevel::Low, ReasoningLevel::High];
+            model
+        };
+        pickers.update(cx, |pickers, cx| {
+            pickers.defaults = ComposerDefaults::default();
+            pickers.harnesses = Loadable::Ready(vec![descriptor(HarnessId::Codex, "Codex")]);
+            pickers.models.insert(
+                HarnessId::Codex,
+                Loadable::Ready(vec![laddered("gpt-a", "A"), laddered("gpt-b", "B")]),
+            );
+            pickers.pick_model("gpt-b".into(), cx);
+            pickers.pick_reasoning(ReasoningLevel::Low, cx);
+        });
+        state.update(cx, |state, cx| state.select_space(Some("b".into()), cx));
+        cx.run_until_parked();
+        pickers.update(cx, |pickers, cx| {
+            assert_eq!(pickers.resolved(cx).model.as_deref(), Some("gpt-a"));
+            assert_eq!(pickers.effective_reasoning(cx), Some(ReasoningLevel::High));
+            pickers.pick_model("gpt-a".into(), cx);
+            pickers.pick_reasoning(ReasoningLevel::High, cx);
+        });
+        state.update(cx, |state, cx| state.select_space(Some("a".into()), cx));
+        cx.run_until_parked();
+        pickers.update(cx, |pickers, cx| {
+            assert_eq!(pickers.resolved(cx).model.as_deref(), Some("gpt-b"));
+            assert_eq!(pickers.effective_reasoning(cx), Some(ReasoningLevel::Low));
+        });
+    }
+
+    #[gpui::test]
     fn device_switch_revalidates_the_catalog_without_blanking(cx: &mut gpui::TestAppContext) {
         let state = cx.new(|_| {
             let mut state = AppState::new();
@@ -7534,15 +7631,17 @@ mod tests {
         let pickers = cx.new(|cx| Pickers::new(state.clone(), cx));
         pickers.update(cx, |pickers, cx| {
             pickers.defaults = ComposerDefaults::default();
-            // A picked harness keeps the chip naming its model throughout.
-            pickers.config.harness = Some(HarnessId::Codex);
+            // A remembered harness keeps the chip naming its model throughout.
+            pickers.defaults.picks.harness = Some(HarnessId::Codex);
             pickers.harnesses = Loadable::Ready(vec![descriptor(HarnessId::Codex, "Codex")]);
             pickers.apply_model_catalog(
                 HarnessId::Codex,
                 Loadable::Ready(vec![bare_model("gpt", "GPT")]),
                 cx,
             );
-            pickers.models.insert(HarnessId::ClaudeCode, Loadable::Loading);
+            pickers
+                .models
+                .insert(HarnessId::ClaudeCode, Loadable::Loading);
         });
         state.update(cx, |state, cx| state.select_space(Some("b".into()), cx));
         cx.run_until_parked();
@@ -7572,7 +7671,7 @@ mod tests {
             assert_ne!(pickers.model_name(cx), ModelName::Named("GPT".into()));
             // With nothing picked or remembered, the old device's harness list
             // doesn't choose either — for the chip or a send.
-            pickers.config.harness = None;
+            pickers.defaults.picks.harness = None;
             assert!(pickers.harnesses_stale);
             assert_eq!(pickers.effective_harness(cx), None);
             assert_eq!(pickers.resolved(cx).harness, None);
@@ -8596,7 +8695,7 @@ mod tests {
         let state = cx.new(|_| AppState::new());
         let pickers = cx.new(|cx| Pickers::new(state, cx));
         pickers.update(cx, |pickers, cx| {
-            pickers.defaults.harness = Some(HarnessId::ClaudeCode);
+            pickers.defaults.picks.harness = Some(HarnessId::ClaudeCode);
             pickers.models.insert(
                 HarnessId::ClaudeCode,
                 Loadable::Ready(vec![opus.clone(), bare_model("haiku", "Haiku")]),
@@ -8666,7 +8765,7 @@ mod tests {
             .update(cx, |picker, _, cx| {
                 // Harness catalog still loading, a pick remembered: named.
                 picker.config.harness = Some(HarnessId::Codex);
-                picker.defaults.remember_model(
+                picker.defaults.picks.remember_model(
                     HarnessId::Codex,
                     "gpt-6-luna".into(),
                     "GPT-6-Luna".into(),
@@ -8682,7 +8781,7 @@ mod tests {
                 // Nothing picked or remembered while loading: loading, not
                 // "Select model".
                 picker.config.model = None;
-                picker.defaults.model_by_harness.clear();
+                picker.defaults.picks.model_by_harness.clear();
                 assert_eq!(picker.model_name(cx), ModelName::Loading);
                 picker.harnesses = Loadable::Loading;
                 assert_eq!(picker.model_name(cx), ModelName::Loading);
@@ -8703,7 +8802,7 @@ mod tests {
                     .insert(HarnessId::Codex, Loadable::Error("offline".into()));
                 assert_eq!(picker.model_name(cx), ModelName::None { no_agents: false });
                 // ...and a remembered pick names it even then.
-                picker.defaults.remember_model(
+                picker.defaults.picks.remember_model(
                     HarnessId::Codex,
                     "gpt-6-luna".into(),
                     "GPT-6-Luna".into(),
@@ -9033,7 +9132,10 @@ mod tests {
                 assert_eq!(picker.resolved(cx).model.as_deref(), Some("claude"));
                 picker.show_compact_models(cx);
                 assert_eq!(picker.model_rows_len(cx), 2);
-                assert_eq!(picker.model_rows(cx)[picker.active].harness, HarnessId::ClaudeCode);
+                assert_eq!(
+                    picker.model_rows(cx)[picker.active].harness,
+                    HarnessId::ClaudeCode
+                );
             })
             .unwrap();
     }
@@ -9147,7 +9249,10 @@ mod tests {
                 picker.show_compact_models(cx);
                 assert_eq!(
                     picker.compact_groups(cx),
-                    vec![(Some(HarnessId::Codex), 0), (Some(HarnessId::ClaudeCode), 2)]
+                    vec![
+                        (Some(HarnessId::Codex), 0),
+                        (Some(HarnessId::ClaudeCode), 2)
+                    ]
                 );
                 picker.toggle_model_favorite(HarnessId::Codex, "gpt-a", cx);
                 assert_eq!(
@@ -9208,7 +9313,9 @@ mod tests {
                 assert_eq!(picker.model_rows(cx)[0].harness, HarnessId::Codex);
                 assert_eq!(picker.model_rows(cx)[1].harness, HarnessId::ClaudeCode);
                 // Searching must also find another provider's model.
-                picker.search.update(cx, |input, cx| input.set_text("Claude", cx));
+                picker
+                    .search
+                    .update(cx, |input, cx| input.set_text("Claude", cx));
                 assert_eq!(picker.model_rows_len(cx), 1);
                 assert_eq!(picker.model_rows(cx)[0].harness, HarnessId::ClaudeCode);
                 picker.activate_model_index(0, cx);
@@ -9238,14 +9345,13 @@ mod tests {
                 picker.show_compact_models(cx);
                 assert_eq!(picker.model_rows_len(cx), 1);
                 assert_eq!(picker.rail_descriptors(cx)[0].id, HarnessId::Codex);
-                picker.search.update(cx, |input, cx| input.set_text("Claude", cx));
+                picker
+                    .search
+                    .update(cx, |input, cx| input.set_text("Claude", cx));
                 assert_eq!(picker.model_rows_len(cx), 0);
                 picker.search.update(cx, |input, cx| input.set_text("", cx));
                 // A chat's provider is fixed: one tab, its own.
-                assert_eq!(
-                    picker.compact_groups(cx),
-                    vec![(Some(HarnessId::Codex), 0)]
-                );
+                assert_eq!(picker.compact_groups(cx), vec![(Some(HarnessId::Codex), 0)]);
                 picker.compact_model_list = false;
                 picker.focus_on_mount = true;
             })

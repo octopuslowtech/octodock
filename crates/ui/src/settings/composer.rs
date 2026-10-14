@@ -43,7 +43,7 @@ pub struct FavoriteModel {
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
-pub struct ComposerDefaults {
+pub struct RunPicks {
     /// Last harness picked on the new-chat canvas.
     pub harness: Option<HarnessId>,
     /// Last model picked, per harness (restored on harness switch).
@@ -59,6 +59,14 @@ pub struct ComposerDefaults {
     /// against that model's catalog row, so it stays safe to send before the
     /// catalog reloads (the Claude harness appends `[1m]` to any model id).
     pub model_options_by_model: HashMap<HarnessId, HashMap<String, ModelOptions>>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct ComposerDefaults {
+    #[serde(flatten)]
+    pub picks: RunPicks,
+    pub picks_by_project: HashMap<String, RunPicks>,
     /// Every model label ever seen (id → label), fed from catalog loads.
     /// The chip's fallback while a harness's list is still loading — a
     /// session whose configured model differs from the remembered pick
@@ -121,6 +129,24 @@ impl ComposerDefaults {
         data_dir.join(FILE_NAME)
     }
 
+    pub fn picks(&self, project: Option<&str>) -> &RunPicks {
+        project
+            .and_then(|project| self.picks_by_project.get(project))
+            .unwrap_or(&self.picks)
+    }
+
+    pub fn picks_mut(&mut self, project: Option<&str>) -> &mut RunPicks {
+        match project {
+            Some(project) => self
+                .picks_by_project
+                .entry(project.to_string())
+                .or_insert_with(|| self.picks.clone()),
+            None => &mut self.picks,
+        }
+    }
+}
+
+impl RunPicks {
     /// The remembered model for a harness, if any.
     pub fn model_for(&self, harness: HarnessId) -> Option<&RememberedModel> {
         self.model_by_harness.get(&harness)
@@ -169,7 +195,9 @@ impl ComposerDefaults {
                 .insert(model.to_string(), level);
         }
     }
+}
 
+impl ComposerDefaults {
     /// The cached display label for a model id, if ever seen.
     pub fn label_for(&self, id: &str) -> Option<&str> {
         self.model_labels.get(id).map(String::as_str)
@@ -225,26 +253,58 @@ mod tests {
     fn round_trip() {
         let dir = tempfile::tempdir().unwrap();
         let mut defaults = ComposerDefaults {
-            harness: Some(HarnessId::ClaudeCode),
-            reasoning: Some(ReasoningLevel::XHigh),
+            picks: RunPicks {
+                harness: Some(HarnessId::ClaudeCode),
+                reasoning: Some(ReasoningLevel::XHigh),
+                ..Default::default()
+            },
             ..Default::default()
         };
-        defaults.remember_model(
+        defaults.picks_mut(Some("space-a")).reasoning = Some(ReasoningLevel::Low);
+        defaults.picks.remember_model(
             HarnessId::ClaudeCode,
             "claude-fable-5".into(),
             "Fable 5".into(),
         );
-        defaults.remember_model(HarnessId::Codex, "gpt-5.2-codex".into(), "GPT-5.2".into());
         defaults
+            .picks
+            .remember_model(HarnessId::Codex, "gpt-5.2-codex".into(), "GPT-5.2".into());
+        defaults
+            .picks
             .model_options_mut(HarnessId::ClaudeCode, "claude-fable-5")
             .insert("contextWindow".into(), "1m".into());
         defaults.save(dir.path()).unwrap();
         let loaded = ComposerDefaults::load(dir.path());
         assert_eq!(loaded, defaults);
         assert_eq!(
-            loaded.model_for(HarnessId::ClaudeCode).map(|m| &*m.label),
+            loaded
+                .picks
+                .model_for(HarnessId::ClaudeCode)
+                .map(|m| &*m.label),
             Some("Fable 5")
         );
+    }
+
+    #[test]
+    fn project_picks_start_from_the_shared_ones_then_diverge() {
+        let model = |defaults: &ComposerDefaults, project| {
+            defaults
+                .picks(project)
+                .model_for(HarnessId::Codex)
+                .map(|m| m.id.clone())
+        };
+        let mut defaults = ComposerDefaults::default();
+        defaults
+            .picks
+            .remember_model(HarnessId::Codex, "m1".into(), "One".into());
+        defaults
+            .picks_mut(Some("a"))
+            .remember_model(HarnessId::Codex, "m2".into(), "Two".into());
+        defaults.picks_mut(Some("a")).reasoning = Some(ReasoningLevel::Low);
+        assert_eq!(model(&defaults, Some("a")).as_deref(), Some("m2"));
+        assert_eq!(model(&defaults, Some("b")).as_deref(), Some("m1"));
+        assert_eq!(model(&defaults, None).as_deref(), Some("m1"));
+        assert_eq!(defaults.picks(Some("b")).reasoning, None);
     }
 
     #[test]
@@ -305,7 +365,7 @@ mod tests {
 
     #[test]
     fn remember_model_updates_harness_and_row() {
-        let mut defaults = ComposerDefaults::default();
+        let mut defaults = RunPicks::default();
         defaults.remember_model(HarnessId::Codex, "m1".into(), "One".into());
         defaults.remember_model(HarnessId::Codex, "m2".into(), "Two".into());
         assert_eq!(defaults.harness, Some(HarnessId::Codex));

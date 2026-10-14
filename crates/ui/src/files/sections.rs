@@ -18,7 +18,7 @@ use std::hash::{Hash, Hasher};
 
 use chrono::{DateTime, Utc};
 use gpui::{
-    Animation, AnimationExt as _, AnyElement, Context, Entity, EntityId, MouseButton, ScrollHandle,
+    Animation, AnimationExt as _, AnyElement, Context, Entity, MouseButton, ScrollHandle,
     SharedString, div, prelude::*, px,
 };
 use zeron_doc::{MessagePart, SubagentStatus};
@@ -518,8 +518,7 @@ impl FilesSurface {
         ];
         let budget = FOOTER_HEIGHT - chrome_height();
         let heights = body_budget(budget, wants, open);
-        let view = cx.entity_id();
-        let subagent_body = self.render_subagent_rows(&plan, view, theme, cx);
+        let subagent_body = self.render_subagent_rows(&plan, theme, cx);
         let subagent_badge = (plan.running() > 0).then(|| {
             crate::running_pill::running_pill(
                 "files-subagents-header",
@@ -590,16 +589,11 @@ impl FilesSurface {
                 })),
             )
             .child(
-                header_action(
-                    "files-sections-fork",
-                    icons::FORK,
-                    "Fork this chat",
-                    theme,
-                )
-                .on_click(cx.listener(|_, _, _, cx| {
-                    cx.stop_propagation();
-                    cx.emit(FilesEvent::ForkChat);
-                })),
+                header_action("files-sections-fork", icons::FORK, "Fork this chat", theme)
+                    .on_click(cx.listener(|_, _, _, cx| {
+                        cx.stop_propagation();
+                        cx.emit(FilesEvent::ForkChat);
+                    })),
             )
             .into_any_element()
     }
@@ -795,7 +789,6 @@ impl FilesSurface {
     fn render_subagent_rows(
         &self,
         plan: &SubagentPlan,
-        view: EntityId,
         theme: &Theme,
         cx: &mut Context<Self>,
     ) -> AnyElement {
@@ -810,7 +803,7 @@ impl FilesSurface {
         let scroll = self.sections.scroll(Section::Subagents);
         let mut list = row_list("files-subagent-rows", &scroll);
         for row in &plan.active {
-            list = list.child(self.render_subagent_row(row, 0.0, now, view, theme, cx));
+            list = list.child(self.render_subagent_row(row, 0.0, now, theme, cx));
         }
         if plan.finished() > 0 {
             list = list.child(self.render_group_header(
@@ -842,7 +835,6 @@ impl FilesSurface {
                             row,
                             2.0 * GROUP_INDENT,
                             now,
-                            view,
                             theme,
                             cx,
                         ));
@@ -868,16 +860,13 @@ impl FilesSurface {
         row: &SubagentRow,
         indent: f32,
         now: DateTime<Utc>,
-        view: EntityId,
         theme: &Theme,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let glyph = status_glyph(
             format!("files-subagent-{}", row.doc_id),
             row.indicator(),
-            view,
             theme,
-            cx,
         );
         let open = row.clone();
         compact_row(format!("files-subagent-{}", row.doc_id), theme)
@@ -1007,16 +996,12 @@ impl FilesSurface {
                 .gap(px(6.0))
                 .h(px(EMPTY_ACTIONS_HEIGHT))
                 .child(
-                    pill_button(
-                        "files-sections-empty-fork",
-                        icons::FORK,
-                        "Fork",
-                        theme,
-                    )
-                    .on_click(cx.listener(|_, _, _, cx| {
-                        cx.stop_propagation();
-                        cx.emit(FilesEvent::ForkChat);
-                    })),
+                    pill_button("files-sections-empty-fork", icons::FORK, "Fork", theme).on_click(
+                        cx.listener(|_, _, _, cx| {
+                            cx.stop_propagation();
+                            cx.emit(FilesEvent::ForkChat);
+                        }),
+                    ),
                 )
                 .child(
                     pill_button(
@@ -1037,18 +1022,11 @@ impl FilesSurface {
                 theme,
             );
         }
-        let view = cx.entity_id();
         let shown = self.sections.shown(Section::Chats);
         let scroll = self.sections.scroll(Section::Chats);
         let mut list = row_list("files-chat-rows", &scroll);
         for row in rows.iter().take(shown) {
-            let glyph = status_glyph(
-                format!("files-chat-{}", row.chat_id),
-                row.status,
-                view,
-                theme,
-                cx,
-            );
+            let glyph = status_glyph(format!("files-chat-{}", row.chat_id), row.status, theme);
             let open_id = row.chat_id.clone();
             let menu_id = row.chat_id.clone();
             let rename_input = self
@@ -1296,13 +1274,7 @@ fn row_title(id: String, title: SharedString) -> impl IntoElement {
 
 /// The compact row's 13px status slot: Working animates the glyph spinner,
 /// Completed wears the check, the rest a 6px dot in the status color.
-fn status_glyph(
-    key: String,
-    status: ChatIndicator,
-    view: EntityId,
-    theme: &Theme,
-    cx: &mut gpui::App,
-) -> AnyElement {
+fn status_glyph(key: String, status: ChatIndicator, theme: &Theme) -> AnyElement {
     let color = crate::shell::spaces::status_dot_color(status, theme);
     let glyph: AnyElement = match status {
         ChatIndicator::Completed => icon(icons::CHECK)
@@ -1311,7 +1283,7 @@ fn status_glyph(
             .text_color(color)
             .into_any_element(),
         ChatIndicator::Working => {
-            loaders::mini_glyph_spinner(format!("{key}-working"), 2.0, theme.glyph, view, cx)
+            loaders::mini_glyph_spinner(format!("{key}-working"), 2.0, theme.glyph)
                 .into_any_element()
         }
         _ => div()

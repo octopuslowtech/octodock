@@ -304,18 +304,16 @@ impl Composer {
         let (show_earlier, show_later, epoch) = (panel.show_earlier, panel.show_later, panel.epoch);
 
         let theme = Theme::of(cx).clone();
-        let view = cx.entity_id();
         // Dismissable whenever the turn is idle, finished or not.
         let header = self.todo_header(&chat_id, &items, summary, expanded, !live, &theme, cx);
 
-        let surface =
-            crate::queue::queue_panel_surface(&theme, cx.has_active_drag()).child(header);
+        let surface = crate::queue::queue_panel_surface(&theme, cx.has_active_drag()).child(header);
         let surface = if expanded {
             let list = div().flex().flex_col().children(
                 rows(&items, show_earlier, show_later)
                     .into_iter()
                     .map(|row| match row {
-                        TodoRow::Item(ix) => todo_item_row(ix, &items[ix], live, &theme, view, cx),
+                        TodoRow::Item(ix) => todo_item_row(ix, &items[ix], live, &theme),
                         TodoRow::Fold { side, count, open } => {
                             self.todo_fold_row(&chat_id, side, count, open, &theme, cx)
                         }
@@ -595,14 +593,7 @@ impl Composer {
 
 /// One checklist row: status glyph + text. Completed work recedes, the
 /// in-progress item is the brightest thing in the list.
-fn todo_item_row(
-    ix: usize,
-    item: &TodoItem,
-    live: bool,
-    theme: &Theme,
-    view: gpui::EntityId,
-    cx: &mut gpui::App,
-) -> AnyElement {
+fn todo_item_row(ix: usize, item: &TodoItem, live: bool, theme: &Theme) -> AnyElement {
     let status = item.status();
     let (color, weight) = match status {
         TodoStatus::Completed => (theme.text_faint, gpui::FontWeight::NORMAL),
@@ -625,7 +616,7 @@ fn todo_item_row(
                 .flex()
                 .items_center()
                 .justify_center()
-                .child(status_glyph(ix, status, live, theme, view, cx)),
+                .child(status_glyph(ix, status, live, theme)),
         )
         .child(
             div()
@@ -643,27 +634,16 @@ fn todo_item_row(
 /// check / active / pending. An in-progress item only animates while the turn
 /// is live; on an idle chat it is a still ring (the agent is not working on
 /// it), so a stopped run does not look busy forever.
-fn status_glyph(
-    ix: usize,
-    status: TodoStatus,
-    live: bool,
-    theme: &Theme,
-    view: gpui::EntityId,
-    cx: &mut gpui::App,
-) -> AnyElement {
+fn status_glyph(ix: usize, status: TodoStatus, live: bool, theme: &Theme) -> AnyElement {
     match status {
         TodoStatus::Completed => icon(icons::CHECK)
             .size(px(12.0))
             .text_color(theme.success)
             .into_any_element(),
-        TodoStatus::InProgress if live => crate::loaders::mini_glyph_spinner(
-            format!("todo-active-{ix}"),
-            2.5,
-            theme.glyph,
-            view,
-            cx,
-        )
-        .into_any_element(),
+        TodoStatus::InProgress if live => {
+            crate::loaders::mini_glyph_spinner(format!("todo-active-{ix}"), 2.5, theme.glyph)
+                .into_any_element()
+        }
         TodoStatus::InProgress => div()
             .size(px(10.0))
             .rounded_full()

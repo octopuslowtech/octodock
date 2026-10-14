@@ -15,7 +15,7 @@ use gpui::{
     PathBuilder, Render, RenderOnce, SharedString, Styled, Window, canvas, div, point, px,
 };
 
-use crate::motion::{self, GRADIENT_SPIN, PULSE_STAGGER, SPLASH_OUT, ZERON_PULSE};
+use crate::motion::{self, GRADIENT_SPIN, SPLASH_OUT, ZERON_PULSE};
 use crate::theme::{GlyphPalette, Theme};
 
 // Shared with the terminal viewport (`zeron_proto::motion`) so both animate the
@@ -23,88 +23,6 @@ use crate::theme::{GlyphPalette, Theme};
 pub use zeron_proto::motion::{
     MARK_CELLS, MARK_SPREAD, MATRIX_SIDE, ZERON_CELLS, mark_cell_stagger,
 };
-
-/// The animated zeron mark (zeron-loader.tsx `ZeronLoader`): the full logo
-/// pixel grid with a light wave sweeping tail→head. Each cell rests dim
-/// (opacity 0.08, scale 0.9) and flares to full as the crest passes; per-cell
-/// stagger follows the flight axis. `height_px` sets the mark's height (width
-/// follows the 820:940 canvas).
-pub fn zeron_mark_loader(
-    _id: &'static str,
-    theme: &Theme,
-    height_px: f32,
-    view: EntityId,
-    cx: &mut App,
-) -> impl IntoElement {
-    let color = theme.text;
-    let scale = height_px / 940.0;
-    let cell = 100.0 * scale;
-    let delta = motion::pulse_delta(&ZERON_PULSE, view, cx);
-    div()
-        .relative()
-        .w(px(820.0 * scale))
-        .h(px(height_px))
-        .children(MARK_CELLS.iter().map(move |&(x, y)| {
-            let stagger = mark_cell_stagger(x, y);
-            // Fixed slot; the animated cell breathes inside it (paint-local).
-            div()
-                .absolute()
-                .left(px(x * scale))
-                .top(px(y * scale))
-                .size(px(cell))
-                .flex()
-                .items_center()
-                .justify_center()
-                .child({
-                    // Negative CSS delay ⇒ the cell starts mid-cycle:
-                    // the stagger ADDS phase (zeron-loader.tsx delayFor).
-                    let phase = (delta + stagger).rem_euclid(1.0);
-                    div()
-                        .rounded(px(16.0 * scale))
-                        .bg(color)
-                        .opacity(motion::pulse_opacity(phase))
-                        .size(px(cell * motion::pulse_scale(phase)))
-                })
-        }))
-}
-
-/// The zeron wave loader: a row of cells pulsing opacity 0.08→1 / scale 0.9→1
-/// over 2.4s with a 0.15s stagger per cell.
-///
-/// `id` scopes the per-cell animation state — give each loader instance a
-/// distinct id.
-pub fn zeron_loader(
-    _id: &'static str,
-    theme: &Theme,
-    cell_px: f32,
-    view: EntityId,
-    cx: &mut App,
-) -> impl IntoElement {
-    let color = theme.text;
-    let slot = cell_px;
-    let delta = motion::pulse_delta(&ZERON_PULSE, view, cx);
-    div()
-        .flex()
-        .flex_row()
-        .items_center()
-        .gap(px(slot / 2.0))
-        .children((0..ZERON_CELLS).map(move |i| {
-            // Fixed slot; the animated cell breathes inside it.
-            div()
-                .size(px(slot))
-                .flex()
-                .items_center()
-                .justify_center()
-                .child({
-                    let phase = motion::staggered_phase(delta, i, PULSE_STAGGER);
-                    div()
-                        .rounded(px(slot / 4.0))
-                        .bg(color)
-                        .opacity(motion::pulse_opacity(phase))
-                        .size(px(slot * motion::pulse_scale(phase)))
-                })
-        }))
-}
 
 pub use zeron_proto::motion::{GSPIN_DIM, GSPIN_ROW_TINTS};
 
@@ -114,13 +32,7 @@ pub use zeron_proto::motion::{GSPIN_DIM, GSPIN_ROW_TINTS};
 /// per-cell phase follows the "arrow-up" pattern (the pulse enters at the
 /// bottom edge and converges toward the top-center cell), so the wave reads
 /// as travelling upward.
-pub fn gradient_spinner(
-    _id: &'static str,
-    _theme: &Theme,
-    cell_px: f32,
-    view: EntityId,
-    cx: &mut App,
-) -> impl IntoElement {
+pub fn gradient_spinner(cell_px: f32, view: EntityId, cx: &mut App) -> impl IntoElement {
     let center = (MATRIX_SIDE as f32 - 1.0) / 2.0;
     let max = MATRIX_SIDE as f32 - 1.0 + center;
     let pulse = motion::activity_pulse_slow(view, cx);
@@ -155,10 +67,8 @@ pub fn mini_glyph_spinner(
     key: impl Into<SharedString>,
     cell_px: f32,
     palette: GlyphPalette,
-    view: EntityId,
-    cx: &mut App,
 ) -> impl IntoElement {
-    mini_spinner_tinted(key, cell_px, palette.rows(), view, cx)
+    mini_spinner_tinted(key, cell_px, palette.rows())
 }
 
 /// Grayscale variant for surfaces where an accent would pull focus (the
@@ -168,18 +78,14 @@ pub fn mini_mono_spinner(
     key: impl Into<SharedString>,
     cell_px: f32,
     tint: gpui::Hsla,
-    view: EntityId,
-    cx: &mut App,
 ) -> impl IntoElement {
-    mini_spinner_tinted(key, cell_px, [tint; 3], view, cx)
+    mini_spinner_tinted(key, cell_px, [tint; 3])
 }
 
 fn mini_spinner_tinted(
     key: impl Into<SharedString>,
     cell_px: f32,
     row_tints: [gpui::Hsla; 3],
-    _view: EntityId,
-    _cx: &mut App,
 ) -> impl IntoElement {
     MiniSpinner {
         key: key.into(),
@@ -464,13 +370,7 @@ pub fn splash_overlay(theme: &Theme, fading: bool, view: EntityId, cx: &mut App)
         .gap(px(12.0))
         // Cell 2.5 — the size every other surface runs this spinner at (the
         // "Sending…" strip, the transcript working trailer).
-        .child(gradient_spinner(
-            "boot-splash-spinner",
-            theme,
-            2.5,
-            view,
-            cx,
-        ))
+        .child(gradient_spinner(2.5, view, cx))
         .child(
             div()
                 .text_size(crate::typography::ui_rems(12.0))

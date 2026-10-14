@@ -68,6 +68,7 @@ mod roll_text;
 pub mod running_pill;
 pub mod settings;
 pub mod shell;
+mod sidebar_host;
 mod sidebar_usage;
 mod usage_panel;
 pub mod sound;
@@ -85,6 +86,7 @@ mod turn_stats;
 pub mod typography;
 pub mod voice;
 mod workspace_links;
+mod zoom_hud;
 
 use std::path::PathBuf;
 

@@ -6455,8 +6455,6 @@ impl Transcript {
                     format!("chip-sending-{row_id}-{ix}"),
                     2.0,
                     theme.glyph,
-                    cx.entity_id(),
-                    cx,
                 )
                 .into_any_element(),
             });
@@ -6699,11 +6697,7 @@ impl Transcript {
                                 copied,
                                 cx.listener(move |this, _, _, cx| {
                                     cx.stop_propagation();
-                                    this.copy_image(
-                                        copy_path.clone(),
-                                        copy_devices.to_vec(),
-                                        cx,
-                                    );
+                                    this.copy_image(copy_path.clone(), copy_devices.to_vec(), cx);
                                     this.mark_code_copied(copy_key.clone(), ix, cx);
                                 }),
                                 theme,
@@ -6725,7 +6719,9 @@ impl Transcript {
             .child(
                 div()
                     .id(SharedString::from(format!("{chip}-images")))
-                    .h(px(TOOL_IMAGE_HEIGHT + TOOL_IMAGE_CAPTION_HEIGHT + 2.0 * TOOL_IMAGE_PAD))
+                    .h(px(TOOL_IMAGE_HEIGHT
+                        + TOOL_IMAGE_CAPTION_HEIGHT
+                        + 2.0 * TOOL_IMAGE_PAD))
                     .py(px(TOOL_IMAGE_PAD))
                     .px(px(TOOL_IMAGE_PAD))
                     .flex()
@@ -7649,8 +7645,6 @@ impl Transcript {
                                     format!("att-sending-{row_id}-{aix}"),
                                     3.0,
                                     glyph,
-                                    cx.entity_id(),
-                                    cx,
                                 )
                                 .into_any_element(),
                             };
@@ -7843,13 +7837,7 @@ impl Transcript {
                 .gap(px(Theme::SPACE_SM))
                 .pt(px(Theme::SPACE_LG))
                 .text_size(crate::typography::ui_rems(11.0))
-                .child(crate::loaders::gradient_spinner(
-                    "working-indicator",
-                    &theme,
-                    2.5,
-                    cx.entity_id(),
-                    cx,
-                ))
+                .child(crate::loaders::gradient_spinner(2.5, cx.entity_id(), cx))
                 .child(
                     // The flavour word rotates every 7s; roll it as it turns.
                     div()
@@ -9127,22 +9115,13 @@ impl Transcript {
                             });
                         }),
                         theme,
-                        cx.entity_id(),
-                        cx,
                     );
                 }
                 let detail = details[ix].clone();
                 let invocation = invocations[ix].clone();
                 if detail.is_none() && invocation.is_none() && !chip_has_images(tool) {
                     return reveal_tool_row(
-                        tool_chip(
-                            tool,
-                            content_reveal,
-                            file_opener.as_ref(),
-                            theme,
-                            cx.entity_id(),
-                            cx,
-                        ),
+                        tool_chip(tool, content_reveal, file_opener.as_ref(), theme),
                         row_height,
                         reveal,
                     );
@@ -9186,14 +9165,7 @@ impl Transcript {
                                 entry.toggled_at = Some(Instant::now());
                                 cx.notify();
                             }))
-                            .child(chip_header(
-                                tool,
-                                open,
-                                file_opener.as_ref(),
-                                theme,
-                                cx.entity_id(),
-                                cx,
-                            )),
+                            .child(chip_header(tool, open, file_opener.as_ref(), theme)),
                     );
                 // The body stays mounted while the close tween shrinks over it.
                 // Invocation first (what was asked), then output/diff (what
@@ -10233,8 +10205,6 @@ fn chip_header_row(
     trail: Option<ChipTrail>,
     file_opener: Option<&ToolFileOpener>,
     theme: &Theme,
-    view: gpui::EntityId,
-    cx: &mut gpui::App,
 ) -> gpui::Div {
     let (label, detail) = match tool.kind {
         ToolItemKind::Thought => ("Thought process", String::new()),
@@ -10453,8 +10423,6 @@ fn chip_header_row(
                 ),
                 2.0,
                 theme.glyph,
-                view,
-                cx,
             )))
         })
         .when_some(tool.duration_ms, |row, ms| {
@@ -10500,17 +10468,8 @@ fn chip_header(
     open: bool,
     file_opener: Option<&ToolFileOpener>,
     theme: &Theme,
-    view: gpui::EntityId,
-    cx: &mut gpui::App,
 ) -> gpui::Div {
-    chip_header_row(
-        tool,
-        Some(ChipTrail::Chevron { open }),
-        file_opener,
-        theme,
-        view,
-        cx,
-    )
+    chip_header_row(tool, Some(ChipTrail::Chevron { open }), file_opener, theme)
 }
 
 /// Max chars a subagent tab title keeps. The strip chip is fixed-width and
@@ -10595,8 +10554,6 @@ fn tool_chip(
     content_reveal: f32,
     file_opener: Option<&ToolFileOpener>,
     theme: &Theme,
-    view: gpui::EntityId,
-    cx: &mut gpui::App,
 ) -> AnyElement {
     div()
         .h(px(CHIP_HEIGHT))
@@ -10622,7 +10579,7 @@ fn tool_chip(
                         .top(px(4.0 * (1.0 - content_reveal)))
                         .opacity(content_reveal)
                 })
-                .child(chip_header_row(tool, None, file_opener, theme, view, cx)),
+                .child(chip_header_row(tool, None, file_opener, theme)),
         )
         .into_any_element()
 }
@@ -10637,8 +10594,6 @@ fn subagent_chip(
     id: SharedString,
     on_open: impl Fn(&gpui::ClickEvent, &mut Window, &mut gpui::App) + 'static,
     theme: &Theme,
-    view: gpui::EntityId,
-    cx: &mut gpui::App,
 ) -> AnyElement {
     div()
         .h(px(CHIP_HEIGHT))
@@ -10668,8 +10623,6 @@ fn subagent_chip(
                     Some(ChipTrail::OpenArrow),
                     None,
                     theme,
-                    view,
-                    cx,
                 )),
         )
         .into_any_element()
@@ -16418,14 +16371,7 @@ mod tests {
                         .id("chip-toggle")
                         .debug_selector(|| "chip-toggle".into())
                         .on_click(move |_, _, _| toggles.set(toggles.get() + 1))
-                        .child(chip_header(
-                            &self.tool,
-                            false,
-                            Some(&self.opener),
-                            &theme,
-                            cx.entity_id(),
-                            cx,
-                        )),
+                        .child(chip_header(&self.tool, false, Some(&self.opener), &theme)),
                 )
             }
         }

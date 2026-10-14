@@ -209,16 +209,6 @@ impl ProjectActionsController {
     }
 }
 
-pub fn preferred_action<'a>(
-    actions: &'a [ProjectAction],
-    preferred_id: Option<&str>,
-) -> Option<&'a ProjectAction> {
-    preferred_id
-        .and_then(|id| actions.iter().find(|action| action.id == id))
-        .or_else(|| actions.iter().find(|action| !action.run_on_worktree_create))
-        .or_else(|| actions.first())
-}
-
 pub fn action_icon(icon: ProjectActionIcon) -> &'static str {
     match icon {
         ProjectActionIcon::Play => crate::icons::ACTION_PLAY,
@@ -265,17 +255,6 @@ mod tests {
             icon: ProjectActionIcon::Play,
             run_on_worktree_create: setup,
         }
-    }
-
-    #[test]
-    fn preferred_selection_and_responsive_cutoff() {
-        let actions = [action("setup", true), action("dev", false)];
-        assert_eq!(
-            preferred_action(&actions, Some("setup")).unwrap().id,
-            "setup"
-        );
-        assert_eq!(preferred_action(&actions, Some("gone")).unwrap().id, "dev");
-        assert_eq!(preferred_action(&actions, None).unwrap().id, "dev");
     }
 
     #[test]

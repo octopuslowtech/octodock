@@ -1,8 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use zeron_proto::{
-    WorkspaceDirectoryPage, WorkspaceEntry, WorkspaceEntryKind, WorkspaceFileSearchMatch,
-};
+use zeron_proto::{WorkspaceDirectoryPage, WorkspaceEntry, WorkspaceEntryKind};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DirectoryLoadState {
@@ -486,20 +484,6 @@ impl FileTreeModel {
         }
         self.rebuild_visible_rows();
         true
-    }
-
-    pub fn reveal_search_match(&mut self, result: &WorkspaceFileSearchMatch) -> Vec<String> {
-        let mut ancestors = Vec::new();
-        let mut current = parent_path(&result.path);
-        while let Some(path) = current {
-            if path.is_empty() {
-                break;
-            }
-            ancestors.push(path.clone());
-            current = parent_path(&path);
-        }
-        ancestors.reverse();
-        ancestors
     }
 
     fn move_selection(&mut self, delta: isize) -> Option<&str> {

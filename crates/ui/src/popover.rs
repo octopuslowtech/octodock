@@ -740,24 +740,6 @@ pub fn anchored_menu_above(
     )
 }
 
-/// Open an upward menu at a point inside a relative trigger. Useful for text
-/// completions, whose natural anchor is the token/caret rather than the input
-/// element's outer edge.
-pub fn anchored_menu_above_at(
-    id: impl Into<SharedString>,
-    position: Point<Pixels>,
-    content: AnyElement,
-    closing: Option<std::time::Instant>,
-) -> AnyElement {
-    div()
-        .absolute()
-        .left(position.x)
-        .top(position.y)
-        .size_0()
-        .child(anchored_menu_above(id, content, closing))
-        .into_any_element()
-}
-
 pub fn full_width_menu_above(
     id: impl Into<SharedString>,
     content: AnyElement,
@@ -858,18 +840,6 @@ pub fn modal(
     card: AnyElement,
 ) -> AnyElement {
     modal_with(id, viewport, card, 16.0, 0.35)
-}
-
-/// [`modal`] with custom rounding for glass palettes. Both use a light
-/// scrim so the blurred backdrop retains its hue instead of becoming gray.
-/// `corner_radius` must match the card's rounding.
-pub fn modal_glass(
-    id: impl Into<ElementId>,
-    viewport: gpui::Size<Pixels>,
-    card: AnyElement,
-    corner_radius: f32,
-) -> AnyElement {
-    modal_with(id, viewport, card, corner_radius, 0.35)
 }
 
 fn modal_with(
@@ -1088,25 +1058,6 @@ pub fn key_hint(theme: &Theme, icon_path: &'static str, label: &'static str) -> 
                     .size(px(12.5))
                     .text_color(theme.text_muted),
             ),
-        )
-        .child(key_hint_label(theme, label))
-}
-
-/// A footer legend whose cap holds a WORD ("tab", "esc") instead of a glyph
-/// — for keys with no icon in the set.
-pub fn key_hint_text(theme: &Theme, cap: &'static str, label: &'static str) -> gpui::Div {
-    let theme = &theme.for_popup();
-    div()
-        .flex()
-        .flex_row()
-        .items_center()
-        .gap(px(5.0))
-        .child(
-            key_cap(theme)
-                .text_size(px(11.0))
-                .font_family(theme.font_mono.clone())
-                .text_color(theme.text_muted)
-                .child(SharedString::from(cap)),
         )
         .child(key_hint_label(theme, label))
 }

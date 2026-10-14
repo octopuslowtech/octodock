@@ -2,7 +2,6 @@
 use crate::theme::Theme;
 use std::sync::Mutex;
 
-pub const ENGINE_VERSION: &str = "mermaid-rs-renderer/0.3.1";
 pub const MAX_SOURCE_BYTES: usize = 16 * 1024;
 // This backend has no cooperative cancellation. Bound inputs and serialize its
 // CPU work across previews; UI owners discard results from superseded revisions.

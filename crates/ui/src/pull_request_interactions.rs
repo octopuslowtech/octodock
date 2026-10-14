@@ -268,8 +268,6 @@ impl PullRequestDetailPage {
                         "pr-comment-pending-spinner",
                         1.5,
                         theme.glyph,
-                        cx.entity_id(),
-                        cx,
                     ))
                     .child(div().flex_none().child("Posting comment"))
                     .child(
@@ -410,8 +408,6 @@ impl PullRequestDetailPage {
                                         "pr-send-spinner",
                                         1.5,
                                         theme.glyph,
-                                        cx.entity_id(),
-                                        cx,
                                     ))
                             } else {
                                 crate::composer::send_circle("pr-send-comment", !can_send, theme)

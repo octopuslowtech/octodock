@@ -11,7 +11,7 @@ use gpui::{
 
 use crate::theme::Theme;
 
-fn shadow(color: Hsla, y: f32, blur: f32, spread: f32, inset: bool) -> BoxShadow {
+pub(crate) fn shadow(color: Hsla, y: f32, blur: f32, spread: f32, inset: bool) -> BoxShadow {
     BoxShadow {
         color,
         offset: point(px(0.0), px(y)),

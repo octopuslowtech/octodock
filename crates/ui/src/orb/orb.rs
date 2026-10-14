@@ -218,18 +218,6 @@ impl Orb {
         }
     }
 
-    pub fn set_paused(&mut self, paused: bool, cx: &mut Context<Self>) {
-        if self.paused == paused {
-            return;
-        }
-        self.paused = paused;
-        if paused {
-            self.animator.stop(Instant::now());
-        }
-        self.geometry_dirty = true;
-        cx.notify();
-    }
-
     pub fn set_reduced_motion(&mut self, reduced: bool, cx: &mut Context<Self>) {
         if self.reduced_motion != reduced {
             self.reduced_motion = reduced;
@@ -238,18 +226,6 @@ impl Orb {
                 self.animator.cancel_transition();
             }
             self.geometry_dirty = true;
-            cx.notify();
-        }
-    }
-
-    pub fn set_target_fps(&mut self, fps: f32, cx: &mut Context<Self>) {
-        self.target_fps = sanitize_fps(fps);
-        cx.notify();
-    }
-
-    pub fn set_pause_when_inactive(&mut self, pause: bool, cx: &mut Context<Self>) {
-        if self.pause_when_inactive != pause {
-            self.pause_when_inactive = pause;
             cx.notify();
         }
     }
@@ -265,42 +241,6 @@ impl Orb {
             self.geometry_dirty = true;
             cx.notify();
         }
-    }
-
-    pub fn state_value(&self) -> OrbState {
-        self.animator.state()
-    }
-
-    pub fn size_value(&self) -> OrbSize {
-        self.animator.size()
-    }
-
-    pub fn theme_value(&self) -> OrbTheme {
-        self.theme
-    }
-
-    pub fn speed_value(&self) -> f32 {
-        self.animator.speed()
-    }
-
-    pub fn is_paused(&self) -> bool {
-        self.paused
-    }
-
-    pub fn reduced_motion_value(&self) -> bool {
-        self.reduced_motion
-    }
-
-    pub fn target_fps_value(&self) -> f32 {
-        self.target_fps
-    }
-
-    pub fn pause_when_inactive_value(&self) -> bool {
-        self.pause_when_inactive
-    }
-
-    pub fn is_visible(&self) -> bool {
-        self.visible
     }
 
     /// Ink direction, resolved against the installed bezel appearance —

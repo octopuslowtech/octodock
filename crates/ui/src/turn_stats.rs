@@ -374,14 +374,8 @@ impl Render for TurnStats {
         }
         let status = if running {
             Some(
-                crate::loaders::mini_mono_spinner(
-                    "turn-stats-running",
-                    2.0,
-                    theme.text_muted,
-                    cx.entity_id(),
-                    cx,
-                )
-                .into_any_element(),
+                crate::loaders::mini_mono_spinner("turn-stats-running", 2.0, theme.text_muted)
+                    .into_any_element(),
             )
         } else if indicator == Indicator::None {
             Some(

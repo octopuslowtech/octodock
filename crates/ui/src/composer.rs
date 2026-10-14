@@ -10672,8 +10672,6 @@ impl Composer {
                             "dictation-progress",
                             2.0,
                             theme.on_accent,
-                            cx.entity_id(),
-                            cx,
                         )),
                 )
             })
@@ -13553,7 +13551,10 @@ mod tests {
         let _guard = runtime.enter();
         let directory = tempfile::tempdir().unwrap();
         crate::settings::composer::ComposerDefaults {
-            harness: Some(HarnessId::Codex),
+            picks: crate::settings::composer::RunPicks {
+                harness: Some(HarnessId::Codex),
+                ..Default::default()
+            },
             ..Default::default()
         }
         .save(directory.path())

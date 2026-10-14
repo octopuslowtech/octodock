@@ -851,8 +851,6 @@ impl HarnessesPage {
                                 format!("harness-install-spinner-{harness:?}"),
                                 1.5,
                                 theme.text_muted,
-                                cx.entity_id(),
-                                cx,
                             ))
                             .child(SharedString::from(install_label(&descriptor.name)))
                             .into_any_element(),

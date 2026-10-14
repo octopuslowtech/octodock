@@ -362,16 +362,6 @@ pub fn page_subtitle(theme: &Theme, copy: impl Into<SharedString>) -> gpui::Div 
         .child(copy.into())
 }
 
-/// Small label above a group of controls (`text-[13px] font-medium`) — the
-/// "Theme" caption over a picker, not a page headline.
-pub fn field_label(theme: &Theme, label: impl Into<SharedString>) -> gpui::Div {
-    div()
-        .text_size(crate::typography::ui_rems(13.0))
-        .font_weight(gpui::FontWeight::MEDIUM)
-        .text_color(theme.text)
-        .child(label.into())
-}
-
 /// A row of equally-sized preview cards for picking one of N *visual* options.
 ///
 /// Deliberately knows nothing about themes: the caller supplies each preview as

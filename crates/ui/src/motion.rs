@@ -578,19 +578,6 @@ where
     })
 }
 
-/// New-thread composition entrance: opacity 0→1 while settling 10px down into
-/// place over [`FADE_IN`]. Keeping the logo, target selectors, composer, and
-/// checkout row under one animation makes the blank canvas arrive as a single
-/// object instead of four independently moving pieces.
-pub fn settle_down<E>(id: impl Into<ElementId>, element: E) -> AnimationElement<E>
-where
-    E: Styled + IntoElement + 'static,
-{
-    element.with_animation(id, FADE_IN.animation(), |el, t| {
-        el.relative().opacity(t).top(px(-10.0 * (1.0 - t)))
-    })
-}
-
 /// Quick opacity-only fade over [`FADE_QUICK`].
 pub fn fade_quick<E>(id: impl Into<ElementId>, element: E) -> AnimationElement<E>
 where
@@ -697,10 +684,7 @@ pub fn matrix_wave(raw_delta: f32, wave_index: usize, wave_count: usize) -> f32 
     pulse_wave(staggered_phase(raw_delta, wave_index, 1.0 / count))
 }
 
-/// Linear interpolation (layout tweens).
-pub fn lerp(from: f32, to: f32, t: f32) -> f32 {
-    from + (to - from) * t
-}
+pub use zeron_proto::motion::lerp;
 
 // ---------------------------------------------------------------------------
 // Hover color fades (CSS `transition-colors` parity)
@@ -1456,19 +1440,11 @@ mod tests {
             fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
                 let theme = crate::theme::Theme::dark();
                 gpui::div()
-                    .child(crate::loaders::gradient_spinner(
-                        "working",
-                        &theme,
-                        2.5,
-                        cx.entity_id(),
-                        cx,
-                    ))
+                    .child(crate::loaders::gradient_spinner(2.5, cx.entity_id(), cx))
                     .child(crate::loaders::mini_glyph_spinner(
                         "sidebar-working",
                         2.0,
                         theme.glyph,
-                        cx.entity_id(),
-                        cx,
                     ))
             }
         }
@@ -1522,13 +1498,7 @@ mod tests {
             assert!(reduced_motion(cx));
 
             let view = cx.new(|_| ());
-            drop(crate::loaders::gradient_spinner(
-                "working",
-                &crate::theme::Theme::dark(),
-                2.5,
-                view.entity_id(),
-                cx,
-            ));
+            drop(crate::loaders::gradient_spinner(2.5, view.entity_id(), cx));
             assert!(
                 cx.try_global::<PulseClock>()
                     .is_some_and(|clock| clock.leases.contains_key(&view.entity_id())),
@@ -1774,12 +1744,18 @@ mod tests {
 
         // Reverse mid-flight re-anchors — no jump — then lands at 1.
         let at_flip = morph(&mut morphs, true, ms(80));
-        assert!((at_flip - mid).abs() < 1e-4, "continuity: {mid} vs {at_flip}");
+        assert!(
+            (at_flip - mid).abs() < 1e-4,
+            "continuity: {mid} vs {at_flip}"
+        );
         assert_eq!(morph(&mut morphs, true, ms(400)), 1.0);
         assert!(!morphs.tick_at(ms(400)));
 
         // Reduced motion snaps a flip.
-        assert_eq!(morphs.value_at("glyph", false, GLYPH_STATE, true, ms(500)), 0.0);
+        assert_eq!(
+            morphs.value_at("glyph", false, GLYPH_STATE, true, ms(500)),
+            0.0
+        );
 
         // Unread for a full frame: pruned (a remount snaps again).
         morphs.tick_at(ms(600));

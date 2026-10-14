@@ -221,14 +221,8 @@ impl Render for UsagePanel {
             .map(|snapshot| usage_accounts(&snapshot.accounts));
 
         let refresh_glyph: AnyElement = if self.refreshing {
-            crate::loaders::mini_mono_spinner(
-                "usage-refreshing",
-                1.5,
-                theme.text_muted,
-                cx.entity_id(),
-                cx,
-            )
-            .into_any_element()
+            crate::loaders::mini_mono_spinner("usage-refreshing", 1.5, theme.text_muted)
+                .into_any_element()
         } else {
             icon(icons::REFRESH)
                 .size(px(14.0))

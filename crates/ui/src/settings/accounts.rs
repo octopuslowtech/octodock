@@ -1048,14 +1048,8 @@ impl AccountsPage {
         }
         let theme = Theme::of(cx).for_settings_surface();
         Some(
-            crate::loaders::mini_mono_spinner(
-                "accounts-refreshing",
-                1.5,
-                theme.text_muted,
-                cx.entity_id(),
-                cx,
-            )
-            .into_any_element(),
+            crate::loaders::mini_mono_spinner("accounts-refreshing", 1.5, theme.text_muted)
+                .into_any_element(),
         )
     }
 
@@ -1392,13 +1386,7 @@ impl AccountsPage {
                 .flex_row()
                 .items_center()
                 .gap(px(8.0))
-                .child(crate::loaders::gradient_spinner(
-                    "login-poll",
-                    &theme,
-                    3.0,
-                    cx.entity_id(),
-                    cx,
-                ))
+                .child(crate::loaders::gradient_spinner(3.0, cx.entity_id(), cx))
                 .child(
                     div()
                         .text_size(crate::typography::ui_rems(12.5))

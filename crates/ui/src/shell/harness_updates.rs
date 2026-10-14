@@ -431,14 +431,8 @@ impl Shell {
             .any(|row| row.connected && active(&row.status))
         {
             Some(
-                loaders::mini_glyph_spinner(
-                    "home-agent-update-activity",
-                    2.0,
-                    theme.glyph,
-                    cx.entity_id(),
-                    cx,
-                )
-                .into_any_element(),
+                loaders::mini_glyph_spinner("home-agent-update-activity", 2.0, theme.glyph)
+                    .into_any_element(),
             )
         } else if all_updated {
             Some(
@@ -908,7 +902,11 @@ impl Shell {
                     && !matches!(&error, zeron_rpc::RpcError::Failed(message)
                         if method == methods::APPLY_HARNESS_UPDATE && message == "update cancelled")
                 {
-                    shell.show_notice(crate::toast::ToastKind::Error, format!("Agent update ({device}): {error}"), cx);
+                    shell.show_notice(
+                        crate::toast::ToastKind::Error,
+                        format!("Agent update ({device}): {error}"),
+                        cx,
+                    );
                 }
                 cx.notify();
             })
