@@ -339,7 +339,10 @@ pub(crate) fn map_item(phase: Phase, item: &Value) -> Vec<AgentEvent> {
                 vec![AgentEvent::ToolResult {
                     id,
                     is_error: status == "failed" || exit_code != 0,
-                    output: None,
+                    output: field(item, &["aggregatedOutput", "aggregated_output"])
+                        .and_then(Value::as_str)
+                        .filter(|text| !text.trim().is_empty())
+                        .map(str::to_owned),
                     diff: None,
                 }]
             }
@@ -383,7 +386,24 @@ pub(crate) fn map_item(phase: Phase, item: &Value) -> Vec<AgentEvent> {
             Phase::Completed => vec![AgentEvent::ToolResult {
                 id,
                 is_error: status == "failed",
-                output: None,
+                output: item
+                    .get("result")
+                    .and_then(|result| result.get("content"))
+                    .and_then(Value::as_array)
+                    .map(|blocks| {
+                        blocks
+                            .iter()
+                            .filter_map(|block| block.get("text").and_then(Value::as_str))
+                            .collect::<Vec<_>>()
+                            .join("\n")
+                    })
+                    .or_else(|| {
+                        item.get("error")
+                            .and_then(|error| error.get("message"))
+                            .and_then(Value::as_str)
+                            .map(str::to_owned)
+                    })
+                    .filter(|text| !text.trim().is_empty()),
                 diff: None,
             }],
         },
@@ -816,6 +836,30 @@ mod tests {
                 output: None,
                 diff: None,
             }]
+        );
+    }
+
+    #[test]
+    fn command_and_mcp_results_forward_output() {
+        let output = |item: Value| match map_item(Phase::Completed, &item).pop() {
+            Some(AgentEvent::ToolResult { output, .. }) => output,
+            other => panic!("expected a tool result, got {other:?}"),
+        };
+        assert_eq!(
+            output(json!({"type": "commandExecution", "id": "c1", "status": "completed", "exitCode": 0, "aggregatedOutput": "total 0\n"})),
+            Some("total 0\n".into())
+        );
+        assert_eq!(
+            output(json!({"type": "commandExecution", "id": "c2", "status": "completed", "aggregatedOutput": null})),
+            None
+        );
+        assert_eq!(
+            output(json!({"type": "mcpToolCall", "id": "m1", "status": "completed", "result": {"content": [{"type": "text", "text": "a"}, {"type": "text", "text": "b"}]}})),
+            Some("a\nb".into())
+        );
+        assert_eq!(
+            output(json!({"type": "mcpToolCall", "id": "m2", "status": "failed", "result": null, "error": {"message": "boom"}})),
+            Some("boom".into())
         );
     }
 

@@ -83,7 +83,7 @@ async fn happy_path_normalizes_and_settles_on_the_result_frame() {
     assert!(events.contains(&AgentEvent::ToolResult {
         id: "TU-1".into(),
         is_error: false,
-        output: None,
+        output: Some("hi".into()),
         diff: None,
     }));
     assert!(events.contains(&AgentEvent::TextDelta {

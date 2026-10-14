@@ -13,7 +13,7 @@ use zeron_proto::{
     AgentEvent, DoneStatus, HarnessId, Model, ReasoningLevel, RunRequest, SteeringMode, ToolCall,
 };
 
-use crate::claude::wire::ImageBlock;
+use crate::claude::wire::{ContentBlock, ImageBlock};
 use crate::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use crate::{Harness, HarnessError, RunControls, Signal, send_signal, shutdown_child};
 
@@ -451,7 +451,9 @@ impl Normalizer {
                     out.push(AgentEvent::ToolResult {
                         id: id.clone(),
                         is_error,
-                        output: None,
+                        output: serde::Deserialize::deserialize(block)
+                            .ok()
+                            .and_then(|block: ContentBlock| block.result_text()),
                         diff: None,
                     });
                     if settled {
